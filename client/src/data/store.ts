@@ -3,7 +3,7 @@
 import type { DbState, Product } from "./types";
 
 export const DB_KEY = "agri-db";
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 /** المفاتيح القديمة قبل توحيد التخزين؛ نقرأ منها مرة واحدة ثم نتركها كنسخة أمان. */
 const LEGACY_PRODUCTS = "agri-products";
@@ -94,6 +94,16 @@ export function migrate(input: any): DbState {
       expiryDate: p.expiryDate || "",
     }));
     version = 6;
+  }
+
+  // 6 -> 7: وحدات بيع بديلة وباركودات إضافية (اختيارية لكل صنف).
+  if (version < 7) {
+    state.products = (state.products || []).map((p: any) => ({
+      ...p,
+      units: Array.isArray(p.units) ? p.units : [],
+      altBarcodes: Array.isArray(p.altBarcodes) ? p.altBarcodes : [],
+    }));
+    version = 7;
   }
 
   state.version = version;

@@ -50,8 +50,17 @@ import {
   MOVE_LABELS,
   OperationError,
   EXPENSE_LABELS,
+  addAltBarcode,
+  addProductUnit,
   daysUntil,
+  findByBarcode,
+  removeAltBarcode,
+  removeProductUnit,
+  findUnit,
   stockAlerts,
+  stockInUnit,
+  unitPrice,
+  unitsOf,
   addExpense,
   createSupplier,
   deleteExpense,
@@ -93,12 +102,18 @@ import PurchasesBoard from "../components/PurchasesBoard";
 import PaymentDialog from "../components/PaymentDialog";
 import ReturnDialog from "../components/ReturnDialog";
 import ExpensesBoard from "../components/ExpensesBoard";
+import ProductUnitsDialog from "../components/ProductUnitsDialog";
 import { useUsbScanner } from "../hooks/useUsbScanner";
 import { usePersistFn } from "../hooks/usePersistFn";
 
 const logoUrl = "/brand/agri-mark.svg";
 
-type CartLine = Product & { qty: number };
+type CartLine = Product & {
+  /** الكمية بوحدة البيع المختارة، لا بالوحدة الأساسية. */
+  qty: number;
+  /** اسم وحدة البيع؛ الوحدة الأساسية عند عدم الاختيار. */
+  unitName: string;
+};
 
 const seedProducts: Product[] = [
   {
@@ -252,6 +267,7 @@ export default function Home() {
   const [showSupplier, setShowSupplier] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
   const [showExpense, setShowExpense] = useState(false);
+  const [unitsProduct, setUnitsProduct] = useState<Product | null>(null);
   const [payingPurchase, setPayingPurchase] = useState<Purchase | null>(null);
   const [returning, setReturning] = useState<{
     kind: ReturnKind;
@@ -268,10 +284,12 @@ export default function Home() {
   const handleBarcode = usePersistFn((rawCode: string) => {
     const code = rawCode.trim();
     if (!code) return;
-    const found = products.find(product => product.barcode === code);
-    if (found) {
-      addToCart(found);
-      setScanFeedback(`تمت إضافة ${found.name}`);
+    const hit = findByBarcode(state, code);
+    if (hit) {
+      addToCart(hit.product, hit.unitName);
+      setScanFeedback(
+        `تمت إضافة ${hit.product.name}${hit.unitName ? ` (${hit.unitName})` : ""}`
+      );
       return;
     }
     setSearch(code);
@@ -308,7 +326,10 @@ export default function Home() {
         (!term ||
           p.name.toLowerCase().includes(term) ||
           p.category.toLowerCase().includes(term) ||
-          (p.barcode || "").includes(term))
+          (p.barcode || "").includes(term) ||
+          // الباركودات الإضافية وباركودات العبوات تدخل البحث أيضًا.
+          (p.altBarcodes || []).some(code => code.includes(term)) ||
+          (p.units || []).some(u => (u.barcode || "").includes(term)))
     );
   }, [products, search, category]);
   // تنبيهات تجمع نقص الرصيد وقرب انتهاء الصلاحية.
@@ -439,30 +460,61 @@ export default function Home() {
       }
     );
   };
-  const addToCart = (p: Product) => {
+  const addToCart = (p: Product, unitName?: string) => {
+    const chosen = unitName || p.unit;
+    const available = stockInUnit(p, chosen);
     setCart(prev => {
-      const existing = prev.find(line => line.id === p.id);
+      // نفس الصنف بوحدتين مختلفتين سطران منفصلان، فالسعر يختلف.
+      const existing = prev.find(
+        line => line.id === p.id && line.unitName === chosen
+      );
       if (existing) {
-        if (existing.qty >= p.stock) {
-          toast.error(`لا يوجد أكثر من ${p.stock} ${p.unit} من هذا الصنف`);
+        if (existing.qty + 1 > available) {
+          toast.error(`لا يوجد أكثر من ${available} ${chosen} من هذا الصنف`);
           return prev;
         }
         return prev.map(line =>
-          line.id === p.id ? { ...line, qty: line.qty + 1 } : line
+          line === existing ? { ...line, qty: line.qty + 1 } : line
         );
       }
-      return [...prev, { ...p, qty: 1 }];
+      if (available < 1) {
+        toast.error(`لا يوجد رصيد كافٍ من ${p.name} بوحدة ${chosen}`);
+        return prev;
+      }
+      return [...prev, { ...p, qty: 1, unitName: chosen }];
     });
     toast.success(`أضيف ${p.name} إلى الفاتورة`);
   };
-  const changeQty = (id: number, delta: number) =>
+  /** تبديل وحدة سطر مع تعديل الكمية إن تجاوزت الرصيد بالوحدة الجديدة. */
+  const switchCartUnit = (line: CartLine, nextUnit: string) =>
+    setCart(prev =>
+      prev.map(item => {
+        if (item.id !== line.id || item.unitName !== line.unitName)
+          return item;
+        const available = stockInUnit(item, nextUnit);
+        if (available < 1) {
+          toast.error(`لا يوجد رصيد كافٍ بوحدة ${nextUnit}`);
+          return item;
+        }
+        return {
+          ...item,
+          unitName: nextUnit,
+          qty: Math.min(item.qty, Math.floor(available)) || 1,
+        };
+      })
+    );
+
+  const changeQty = (id: number, unitName: string, delta: number) =>
     setCart(prev =>
       prev.flatMap(line => {
-        if (line.id !== id) return [line];
+        if (line.id !== id || line.unitName !== unitName) return [line];
         const qty = line.qty + delta;
         if (qty <= 0) return [];
-        if (qty > line.stock) {
-          toast.error(`الرصيد المتاح من ${line.name} هو ${line.stock}`);
+        const available = stockInUnit(line, line.unitName);
+        if (qty > available) {
+          toast.error(
+            `الرصيد المتاح من ${line.name} هو ${available} ${line.unitName}`
+          );
           return [line];
         }
         return [{ ...line, qty }];
@@ -481,7 +533,8 @@ export default function Home() {
           lines: cart.map(line => ({
             productId: line.id,
             qty: line.qty,
-            price: line.price,
+            price: unitPrice(line, line.unitName),
+            unitName: line.unitName,
           })),
         }),
       sale => {
@@ -559,6 +612,55 @@ export default function Home() {
     );
   };
 
+  /** إدارة وحدات الصنف وباركوداته؛ كل تغيير معاملة مستقلة. */
+  const productUnitActions = {
+    addUnit: (unit: {
+      name: string;
+      factor: number;
+      price: number;
+      barcode: string;
+    }) => {
+      if (!unitsProduct) return;
+      runSafe(
+        draft => addProductUnit(draft, unitsProduct.id, unit),
+        updated => {
+          setUnitsProduct(updated);
+          toast.success(`أضيفت وحدة ${unit.name}`);
+        }
+      );
+    },
+    removeUnit: (name: string) => {
+      if (!unitsProduct) return;
+      runSafe(
+        draft => removeProductUnit(draft, unitsProduct.id, name),
+        updated => {
+          setUnitsProduct(updated);
+          toast.success("تم حذف الوحدة");
+        }
+      );
+    },
+    addBarcode: (code: string) => {
+      if (!unitsProduct) return;
+      runSafe(
+        draft => addAltBarcode(draft, unitsProduct.id, code),
+        updated => {
+          setUnitsProduct(updated);
+          toast.success("تمت إضافة الباركود");
+        }
+      );
+    },
+    removeBarcode: (code: string) => {
+      if (!unitsProduct) return;
+      runSafe(
+        draft => removeAltBarcode(draft, unitsProduct.id, code),
+        updated => {
+          setUnitsProduct(updated);
+          toast.success("تم حذف الباركود");
+        }
+      );
+    },
+  };
+
   const handlePay = (purchase: Purchase) => setPayingPurchase(purchase);
 
   const submitPayment = (amount: number) => {
@@ -614,14 +716,17 @@ export default function Home() {
     invoiceNo: string,
     customer = "عميل نقدي"
   ) => {
-    const total = lines.reduce((sum, line) => sum + line.price * line.qty, 0);
+    const total = lines.reduce(
+      (sum, line) => sum + unitPrice(line, line.unitName) * line.qty,
+      0
+    );
     const receipt = window.open("", "_blank", "width=380,height=700");
     if (!receipt) {
       toast.error("اسمح بالنوافذ المنبثقة لطباعة الفاتورة");
       return;
     }
     receipt.document.write(
-      `<html dir="rtl"><head><title>فاتورة ${invoiceNo}</title><style>body{width:72mm;margin:0 auto;padding:5mm 3mm;font-family:Arial,sans-serif;color:#111;font-size:12px}h1{text-align:center;font-size:19px;margin:0 0 4px}p{text-align:center;margin:3px 0;color:#555;font-size:10px}.line{border-top:1px dashed #777;margin:8px 0}.row{display:flex;justify-content:space-between;gap:8px;margin:7px 0}.row strong{font-size:11px}.total{font-size:16px;font-weight:bold;margin-top:12px}.thanks{text-align:center;font-size:11px;margin-top:18px}@media print{button{display:none}}</style></head><body><h1>دفتر الزراعة</h1><p>محل الواحة الزراعية</p><p>فاتورة بيع ${invoiceNo} · ${new Date().toLocaleString("ar-EG")}</p><p>العميل: ${customer}</p><div class="line"></div>${lines.map(line => `<div class="row"><span>${line.name} × ${line.qty}</span><strong>${money(line.price * line.qty)}</strong></div>`).join("")}<div class="line"></div><div class="row total"><span>الإجمالي</span><strong>${money(total)}</strong></div><p class="thanks">شكرًا لتعاملكم معنا</p><script>window.onload=function(){window.print();}</script></body></html>`
+      `<html dir="rtl"><head><title>فاتورة ${invoiceNo}</title><style>body{width:72mm;margin:0 auto;padding:5mm 3mm;font-family:Arial,sans-serif;color:#111;font-size:12px}h1{text-align:center;font-size:19px;margin:0 0 4px}p{text-align:center;margin:3px 0;color:#555;font-size:10px}.line{border-top:1px dashed #777;margin:8px 0}.row{display:flex;justify-content:space-between;gap:8px;margin:7px 0}.row strong{font-size:11px}.total{font-size:16px;font-weight:bold;margin-top:12px}.thanks{text-align:center;font-size:11px;margin-top:18px}@media print{button{display:none}}</style></head><body><h1>دفتر الزراعة</h1><p>محل الواحة الزراعية</p><p>فاتورة بيع ${invoiceNo} · ${new Date().toLocaleString("ar-EG")}</p><p>العميل: ${customer}</p><div class="line"></div>${lines.map(line => `<div class="row"><span>${line.name} × ${line.qty} ${line.unitName}</span><strong>${money(unitPrice(line, line.unitName) * line.qty)}</strong></div>`).join("")}<div class="line"></div><div class="row total"><span>الإجمالي</span><strong>${money(total)}</strong></div><p class="thanks">شكرًا لتعاملكم معنا</p><script>window.onload=function(){window.print();}</script></body></html>`
     );
     receipt.document.close();
   };
@@ -998,6 +1103,7 @@ export default function Home() {
               setReturning({ kind, source })
             }
             onAddExpense={() => setShowExpense(true)}
+            onOpenUnits={(p: Product) => setUnitsProduct(p)}
             onDeleteExpense={removeExpense}
           />
         )}
@@ -1077,24 +1183,55 @@ export default function Home() {
                 <span>اليوم، الآن</span>
               </div>
               {cart.length ? (
-                cart.map((line, i) => (
-                  <div className="cart-line" key={`${line.id}-${i}`}>
-                    <span>
-                      <b>{line.name}</b>
-                      <small>
-                        {money(line.price)} · {line.unit}
-                      </small>
-                      <span className="qty-controls">
-                        <button onClick={() => changeQty(line.id, -1)}>
-                          −
-                        </button>
-                        <b>{line.qty}</b>
-                        <button onClick={() => changeQty(line.id, 1)}>+</button>
+                cart.map((line, i) => {
+                  const options = unitsOf(line);
+                  const each = unitPrice(line, line.unitName);
+                  return (
+                    <div
+                      className="cart-line"
+                      key={`${line.id}-${line.unitName}-${i}`}
+                    >
+                      <span>
+                        <b>{line.name}</b>
+                        <small>
+                          {money(each)} · {line.unitName}
+                        </small>
+                        {options.length > 1 && (
+                          <select
+                            className="unit-select"
+                            value={line.unitName}
+                            onChange={e =>
+                              switchCartUnit(line, e.target.value)
+                            }
+                          >
+                            {options.map(u => (
+                              <option key={u.name} value={u.name}>
+                                {u.name}
+                                {u.factor > 1 ? ` (${u.factor} ${line.unit})` : ""}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        <span className="qty-controls">
+                          <button
+                            onClick={() =>
+                              changeQty(line.id, line.unitName, -1)
+                            }
+                          >
+                            −
+                          </button>
+                          <b>{line.qty}</b>
+                          <button
+                            onClick={() => changeQty(line.id, line.unitName, 1)}
+                          >
+                            +
+                          </button>
+                        </span>
                       </span>
-                    </span>
-                    <strong>{money(line.price * line.qty)}</strong>
-                  </div>
-                ))
+                      <strong>{money(each * line.qty)}</strong>
+                    </div>
+                  );
+                })
               ) : (
                 <div className="empty-cart">
                   <ShoppingCart size={28} />
@@ -1105,7 +1242,10 @@ export default function Home() {
                 <span>الإجمالي</span>
                 <strong>
                   {money(
-                    cart.reduce((a, line) => a + line.price * line.qty, 0)
+                    cart.reduce(
+                      (a, line) => a + unitPrice(line, line.unitName) * line.qty,
+                      0
+                    )
                   )}
                 </strong>
               </div>
@@ -1189,6 +1329,21 @@ export default function Home() {
               <FilePlus2 size={18} /> حفظ المرفق
             </button>
           </div>
+        </Modal>
+      )}
+      {unitsProduct && (
+        <Modal
+          title="وحدات البيع والباركودات"
+          onClose={() => setUnitsProduct(null)}
+        >
+          <ProductUnitsDialog
+            product={unitsProduct}
+            money={money}
+            onAddUnit={productUnitActions.addUnit}
+            onRemoveUnit={productUnitActions.removeUnit}
+            onAddBarcode={productUnitActions.addBarcode}
+            onRemoveBarcode={productUnitActions.removeBarcode}
+          />
         </Modal>
       )}
       {showExpense && (
@@ -1534,6 +1689,7 @@ function ModuleView({
   onVoidPurchase,
   onReturn,
   onAddExpense,
+  onOpenUnits,
   onDeleteExpense,
   search,
   setSearch,
@@ -1693,9 +1849,7 @@ function ModuleView({
                 <button
                   className="small-add"
                   onClick={() =>
-                    active === "sales"
-                      ? addToCart(p)
-                      : toast.info("تم تحديد الصنف")
+                    active === "sales" ? addToCart(p) : onOpenUnits(p)
                   }
                 >
                   {active === "sales" ? (
@@ -1703,7 +1857,7 @@ function ModuleView({
                       <Plus size={15} /> أضف للفاتورة
                     </>
                   ) : (
-                    "تعديل"
+                    "الوحدات"
                   )}
                 </button>
               </div>

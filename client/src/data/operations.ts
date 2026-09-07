@@ -16,6 +16,7 @@ import type {
   Expense,
   ExpenseCategory,
   Product,
+  ProductUnit,
 } from "./types";
 import { nextId, nextNumber } from "./store";
 
@@ -507,7 +508,13 @@ export function payPurchase(
 export type SaleInput = {
   customer?: string;
   at?: string;
-  lines: { productId: number; qty: number; price: number }[];
+  lines: {
+    productId: number;
+    qty: number;
+    price: number;
+    /** وحدة البيع المختارة؛ تُترك فارغة للوحدة الأساسية. */
+    unitName?: string;
+  }[];
 };
 
 /**
@@ -527,16 +534,28 @@ export function postSale(state: DbState, input: SaleInput): Sale {
     const qty = Number(raw.qty);
     if (!Number.isFinite(qty) || qty <= 0)
       fail(`الكمية يجب أن تكون أكبر من صفر: ${product.name}`);
-    if (qty > product.stock)
-      fail(`الرصيد المتاح من ${product.name} هو ${product.stock}`);
+
+    // نحوّل إلى الوحدة الأساسية فورًا: المخزون والتكلفة يُحسبان بها دائمًا.
+    const unit = findUnit(product, raw.unitName);
+    const baseQty = round2(qty * unit.factor);
+    if (baseQty > product.stock)
+      fail(
+        `الرصيد المتاح من ${product.name} هو ${stockInUnit(product, unit.name)} ${unit.name}`
+      );
+
+    // السعر المرسل يخص وحدة البيع. نحتفظ به غير مقرَّب لأن التقريب هنا
+    // يضيع كسورًا تظهر في الإجمالي (110 ÷ 12 مثلًا).
+    const linePrice = Number(raw.price) / unit.factor;
 
     lines.push({
       id: product.id,
       name: product.name,
       unit: product.unit,
-      qty,
-      price: Number(raw.price),
+      qty: baseQty,
+      price: linePrice,
       unitCost: product.avgCost,
+      soldUnit: unit.factor === 1 ? undefined : unit.name,
+      soldQty: unit.factor === 1 ? undefined : qty,
     });
   });
 
@@ -1009,6 +1028,160 @@ export function stockAlerts(state: DbState, now = new Date()): StockAlert[] {
   return alerts.sort(
     (a, b) => rank[a.kind] - rank[b.kind] || a.stock - b.stock
   );
+}
+
+
+// ------------------------------------------------- الوحدات والباركودات
+
+/** الوحدة الأساسية للصنف؛ معاملها 1 دائمًا وهي مرجع كل التحويلات. */
+export function baseUnit(product: Product): ProductUnit {
+  return { name: product.unit, factor: 1, price: product.price };
+}
+
+/** كل وحدات البيع المتاحة للصنف: الأساسية أولًا ثم البدائل الصحيحة. */
+export function unitsOf(product: Product): ProductUnit[] {
+  const extra = (product.units || []).filter(
+    u => u && u.name?.trim() && Number(u.factor) > 0
+  );
+  return [baseUnit(product), ...extra];
+}
+
+/** يبحث عن وحدة بالاسم؛ يعيد الأساسية عند عدم التطابق. */
+export function findUnit(product: Product, name?: string): ProductUnit {
+  if (!name) return baseUnit(product);
+  return (
+    unitsOf(product).find(u => u.name.trim() === name.trim()) ||
+    baseUnit(product)
+  );
+}
+
+/** يحوّل كمية من وحدة معينة إلى الوحدة الأساسية للمخزون. */
+export function toBaseQty(product: Product, qty: number, unitName?: string) {
+  return round2(qty * findUnit(product, unitName).factor);
+}
+
+/**
+ * سعر بيع الوحدة: السعر الصريح إن حُدد، وإلا سعر الوحدة الأساسية × المعامل.
+ * هذا يسمح بتسعير الكرتون أرخص من مجموع عبواته دون كسر الحساب.
+ */
+export function unitPrice(product: Product, unitName?: string) {
+  const unit = findUnit(product, unitName);
+  if (typeof unit.price === "number" && unit.price > 0) return unit.price;
+  return round2(product.price * unit.factor);
+}
+
+/** الرصيد المتاح معبّرًا عنه بالوحدة المطلوبة، لا بالوحدة الأساسية. */
+export function stockInUnit(product: Product, unitName?: string) {
+  const unit = findUnit(product, unitName);
+  if (unit.factor <= 0) return 0;
+  return round2(product.stock / unit.factor);
+}
+
+/** يتحقق من صحة وحدة قبل حفظها في المنتج. */
+export function validateUnit(product: Product, unit: ProductUnit) {
+  const name = (unit.name || "").trim();
+  if (!name) fail("اسم الوحدة مطلوب");
+  if (name === product.unit) fail("هذا هو اسم الوحدة الأساسية للصنف");
+
+  const factor = Number(unit.factor);
+  if (!Number.isFinite(factor) || factor <= 0)
+    fail("معامل التحويل يجب أن يكون أكبر من صفر");
+  if (factor === 1) fail("معامل 1 يساوي الوحدة الأساسية؛ استخدم رقمًا مختلفًا");
+
+  const exists = (product.units || []).some(
+    u => u.name.trim() === name && u !== unit
+  );
+  if (exists) fail("توجد وحدة بنفس الاسم لهذا الصنف");
+
+  const price = Number(unit.price || 0);
+  if (price < 0) fail("سعر الوحدة لا يصح أن يكون سالبًا");
+  return { name, factor: round2(factor), price: round2(price) };
+}
+
+export function addProductUnit(
+  state: DbState,
+  productId: number,
+  unit: ProductUnit
+): Product {
+  const product = state.products.find(p => p.id === productId);
+  if (!product) fail("الصنف غير موجود");
+  const clean = validateUnit(product, unit);
+
+  const barcode = (unit.barcode || "").trim();
+  if (barcode) assertBarcodeFree(state, barcode, productId);
+
+  product.units = [...(product.units || []), { ...clean, barcode }];
+  return product;
+}
+
+export function removeProductUnit(
+  state: DbState,
+  productId: number,
+  unitName: string
+): Product {
+  const product = state.products.find(p => p.id === productId);
+  if (!product) fail("الصنف غير موجود");
+  product.units = (product.units || []).filter(
+    u => u.name.trim() !== unitName.trim()
+  );
+  return product;
+}
+
+/** يمنع إسناد باركود مستخدَم لصنف آخر، وإلا اختلط المسح بين صنفين. */
+function assertBarcodeFree(state: DbState, code: string, exceptId?: number) {
+  const owner = findByBarcode(state, code);
+  if (owner && owner.product.id !== exceptId)
+    fail(`الباركود ${code} مستخدم بالفعل للصنف ${owner.product.name}`);
+}
+
+export function addAltBarcode(
+  state: DbState,
+  productId: number,
+  code: string
+): Product {
+  const product = state.products.find(p => p.id === productId);
+  if (!product) fail("الصنف غير موجود");
+  const barcode = (code || "").trim();
+  if (!barcode) fail("أدخل رقم الباركود");
+  assertBarcodeFree(state, barcode, productId);
+  if (product.barcode === barcode || (product.altBarcodes || []).includes(barcode))
+    fail("هذا الباركود مسجل لنفس الصنف");
+
+  product.altBarcodes = [...(product.altBarcodes || []), barcode];
+  return product;
+}
+
+export function removeAltBarcode(
+  state: DbState,
+  productId: number,
+  code: string
+): Product {
+  const product = state.products.find(p => p.id === productId);
+  if (!product) fail("الصنف غير موجود");
+  product.altBarcodes = (product.altBarcodes || []).filter(b => b !== code);
+  return product;
+}
+
+/**
+ * يبحث عن صنف بأي باركود: الأساسي أو الإضافي أو باركود وحدة.
+ * عند مطابقة باركود وحدة نعيد اسمها ليُضاف السطر بالوحدة الصحيحة مباشرة.
+ */
+export function findByBarcode(
+  state: DbState,
+  code: string
+): { product: Product; unitName?: string } | null {
+  const target = (code || "").trim();
+  if (!target) return null;
+
+  for (const product of state.products) {
+    if (product.barcode === target) return { product };
+    if ((product.altBarcodes || []).includes(target)) return { product };
+    const unit = (product.units || []).find(
+      u => (u.barcode || "").trim() === target
+    );
+    if (unit) return { product, unitName: unit.name };
+  }
+  return null;
 }
 
 export const MOVE_LABELS: Record<StockMoveType, string> = {
