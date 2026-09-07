@@ -13,6 +13,9 @@ import type {
   ReturnKind,
   ReturnLine,
   StockReturn,
+  Expense,
+  ExpenseCategory,
+  Product,
 } from "./types";
 import { nextId, nextNumber } from "./store";
 
@@ -812,6 +815,200 @@ export function netProfitSummary(state: DbState, sales: Sale[]) {
     returnsTotal,
     margin: revenue > 0 ? round2((grossProfit / revenue) * 100) : 0,
   };
+}
+
+
+// ------------------------------------------------------ المصروفات التشغيلية
+
+export const EXPENSE_LABELS: Record<ExpenseCategory, string> = {
+  rent: "إيجار",
+  salaries: "رواتب وأجور",
+  utilities: "كهرباء وماء واتصالات",
+  transport: "نقل وشحن",
+  maintenance: "صيانة",
+  supplies: "مستلزمات تشغيل",
+  government: "رسوم حكومية",
+  other: "أخرى",
+};
+
+export type ExpenseInput = {
+  category: ExpenseCategory;
+  description: string;
+  amount: number;
+  at?: string;
+  reference?: string;
+  notes?: string;
+};
+
+export function addExpense(state: DbState, input: ExpenseInput): Expense {
+  const description = (input.description || "").trim();
+  if (!description) fail("اكتب وصفًا للمصروف");
+
+  const amount = round2(Number(input.amount));
+  if (!Number.isFinite(amount) || amount <= 0)
+    fail("قيمة المصروف يجب أن تكون أكبر من صفر");
+  if (!EXPENSE_LABELS[input.category]) fail("اختر بند المصروف");
+
+  const expense: Expense = {
+    id: nextId(state.expenses),
+    at: input.at || new Date().toISOString(),
+    category: input.category,
+    description,
+    amount,
+    reference: (input.reference || "").trim(),
+    notes: (input.notes || "").trim(),
+  };
+  state.expenses.unshift(expense);
+  return expense;
+}
+
+export function deleteExpense(state: DbState, id: number) {
+  const index = state.expenses.findIndex(e => e.id === id);
+  if (index < 0) fail("المصروف غير موجود");
+  state.expenses.splice(index, 1);
+}
+
+export function expensesTotal(expenses: Expense[]) {
+  return round2(expenses.reduce((sum, e) => sum + e.amount, 0));
+}
+
+/** تجميع المصروفات حسب البند لعرضها في التقرير. */
+export function expensesByCategory(expenses: Expense[]) {
+  const map = new Map<ExpenseCategory, number>();
+  expenses.forEach(e =>
+    map.set(e.category, round2((map.get(e.category) || 0) + e.amount))
+  );
+  return Array.from(map.entries())
+    .map(([category, total]) => ({
+      category,
+      label: EXPENSE_LABELS[category],
+      total,
+    }))
+    .sort((a, b) => b.total - a.total);
+}
+
+/**
+ * صافي الربح = الربح الإجمالي (بعد المرتجعات) ناقص المصروفات التشغيلية.
+ * هذا هو الرقم الذي يهم صاحب المحل فعليًا في نهاية الشهر.
+ */
+export function netIncome(state: DbState, sales: Sale[], expenses: Expense[]) {
+  const gross = netProfitSummary(state, sales);
+  const opex = expensesTotal(expenses);
+  const net = round2(gross.grossProfit - opex);
+  return {
+    ...gross,
+    expenses: opex,
+    netProfit: net,
+    netMargin: gross.revenue > 0 ? round2((net / gross.revenue) * 100) : 0,
+  };
+}
+
+
+// -------------------------------------------------------- تنبيهات المخزون
+
+/** الحد الافتراضي لإعادة الطلب عندما لا يحدده المستخدم لصنف معين. */
+export const DEFAULT_REORDER_LEVEL = 8;
+/** عدد الأيام التي نعتبر الصنف بعدها «قارب على الانتهاء». */
+export const EXPIRY_WARNING_DAYS = 60;
+
+export type StockAlert = {
+  productId: number;
+  name: string;
+  unit: string;
+  stock: number;
+  kind: "out" | "low" | "expired" | "expiring";
+  /** رسالة عربية جاهزة للعرض مباشرة. */
+  message: string;
+  /** الأيام المتبقية للصلاحية؛ سالبة إذا انتهت. */
+  daysLeft?: number;
+};
+
+export function reorderLevelOf(product: Product) {
+  return typeof product.reorderLevel === "number"
+    ? product.reorderLevel
+    : DEFAULT_REORDER_LEVEL;
+}
+
+/** أيام متبقية حتى تاريخ الصلاحية؛ null إذا لم يُسجل تاريخ. */
+export function daysUntil(dateStr?: string, now = new Date()) {
+  if (!dateStr) return null;
+  const target = new Date(dateStr);
+  if (Number.isNaN(target.getTime())) return null;
+  const startOfDay = (d: Date) =>
+    new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  return Math.round(
+    (startOfDay(target) - startOfDay(now)) / (1000 * 60 * 60 * 24)
+  );
+}
+
+/**
+ * تنبيهات المخزون مرتبة بالأهمية: المنتهي أولًا ثم النافد ثم الناقص.
+ * تجمع نقص الرصيد وقرب انتهاء الصلاحية في قائمة واحدة يفهمها البائع.
+ */
+export function stockAlerts(state: DbState, now = new Date()): StockAlert[] {
+  const alerts: StockAlert[] = [];
+
+  state.products.forEach(product => {
+    const level = reorderLevelOf(product);
+    const days = daysUntil(product.expiryDate, now);
+
+    // الصلاحية أهم من الرصيد: صنف منتهٍ لا يجوز بيعه أصلًا.
+    if (days !== null && product.stock > 0) {
+      if (days < 0)
+        alerts.push({
+          productId: product.id,
+          name: product.name,
+          unit: product.unit,
+          stock: product.stock,
+          kind: "expired",
+          daysLeft: days,
+          message: `انتهت صلاحيته منذ ${Math.abs(days)} يومًا`,
+        });
+      else if (days <= EXPIRY_WARNING_DAYS)
+        alerts.push({
+          productId: product.id,
+          name: product.name,
+          unit: product.unit,
+          stock: product.stock,
+          kind: "expiring",
+          daysLeft: days,
+          message:
+            days === 0
+              ? "تنتهي صلاحيته اليوم"
+              : `تنتهي صلاحيته خلال ${days} يومًا`,
+        });
+    }
+
+    if (product.stock <= 0) {
+      alerts.push({
+        productId: product.id,
+        name: product.name,
+        unit: product.unit,
+        stock: product.stock,
+        kind: "out",
+        message: "نفد من المخزن",
+      });
+    } else if (product.stock <= level) {
+      alerts.push({
+        productId: product.id,
+        name: product.name,
+        unit: product.unit,
+        stock: product.stock,
+        kind: "low",
+        message: `الرصيد ${product.stock} ${product.unit} · حد الطلب ${level}`,
+      });
+    }
+  });
+
+  const rank: Record<StockAlert["kind"], number> = {
+    expired: 0,
+    out: 1,
+    expiring: 2,
+    low: 3,
+  };
+  return alerts.sort(
+    (a, b) => rank[a.kind] - rank[b.kind] || a.stock - b.stock
+  );
 }
 
 export const MOVE_LABELS: Record<StockMoveType, string> = {

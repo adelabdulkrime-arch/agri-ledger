@@ -15,6 +15,10 @@ export type Product = {
   avgCost: number;
   /** آخر تكلفة شراء فعلية، مفيدة لتسعير الطلب القادم. */
   lastCost: number;
+  /** حد إعادة الطلب؛ عند بلوغه يظهر الصنف في التنبيهات. */
+  reorderLevel?: number;
+  /** تاريخ انتهاء الصلاحية، مهم للمبيدات والأدوية الزراعية. */
+  expiryDate?: string;
 };
 
 export type SaleLine = {
@@ -160,6 +164,30 @@ export type StockReturn = {
   reason: string;
 };
 
+
+/** بنود المصروفات الشائعة في محل تجزئة؛ قابلة للتوسع من الإعدادات لاحقًا. */
+export type ExpenseCategory =
+  | "rent"
+  | "salaries"
+  | "utilities"
+  | "transport"
+  | "maintenance"
+  | "supplies"
+  | "government"
+  | "other";
+
+export type Expense = {
+  id: number;
+  at: string;
+  category: ExpenseCategory;
+  /** وصف مختصر يظهر في التقرير. */
+  description: string;
+  amount: number;
+  /** مرجع اختياري: رقم إيصال أو فاتورة خارجية. */
+  reference: string;
+  notes: string;
+};
+
 /** الحالة الكاملة المحفوظة؛ كل ما يخص المحل في مكان واحد. */
 export type DbState = {
   version: number;
@@ -170,4 +198,5 @@ export type DbState = {
   stockMoves: StockMove[];
   supplierLedger: SupplierLedgerEntry[];
   returns: StockReturn[];
+  expenses: Expense[];
 };

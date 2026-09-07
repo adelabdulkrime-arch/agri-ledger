@@ -49,7 +49,14 @@ import { useDb } from "../data/useDb";
 import {
   MOVE_LABELS,
   OperationError,
+  EXPENSE_LABELS,
+  daysUntil,
+  stockAlerts,
+  addExpense,
   createSupplier,
+  deleteExpense,
+  expensesTotal,
+  netIncome,
   editPurchase,
   inventoryValue,
   netProfitSummary,
@@ -70,6 +77,8 @@ import {
 import { emptyState, migrate } from "../data/store";
 import type {
   DbState,
+  Expense,
+  ExpenseCategory,
   ReturnKind,
   PaymentMethod,
   Product,
@@ -83,6 +92,7 @@ import SuppliersBoard from "../components/SuppliersBoard";
 import PurchasesBoard from "../components/PurchasesBoard";
 import PaymentDialog from "../components/PaymentDialog";
 import ReturnDialog from "../components/ReturnDialog";
+import ExpensesBoard from "../components/ExpensesBoard";
 import { useUsbScanner } from "../hooks/useUsbScanner";
 import { usePersistFn } from "../hooks/usePersistFn";
 
@@ -161,9 +171,19 @@ const menu = [
   { id: "purchases", label: "المشتريات", icon: ShoppingBag },
   { id: "suppliers", label: "الموردون", icon: Truck },
   { id: "customers", label: "العملاء", icon: UsersRound },
-  { id: "accounts", label: "الحسابات والمصروفات", icon: WalletCards },
+  { id: "expenses", label: "المصروفات", icon: WalletCards },
+  { id: "accounts", label: "الحسابات", icon: Calculator },
   { id: "reports", label: "التقارير", icon: BarChart3 },
 ];
+
+/** لون تاريخ الصلاحية: أحمر للمنتهي وبرتقالي للمقترب. */
+function expiryTone(date?: string) {
+  const days = daysUntil(date);
+  if (days === null) return "";
+  if (days < 0) return "danger-text";
+  if (days <= 60) return "warn-text";
+  return "good-text";
+}
 
 /** وقت مختصر بالعربية: «منذ ١٢ دقيقة» بدل تاريخ كامل يصعب قراءته سريعًا. */
 function relativeTime(iso: string) {
@@ -231,6 +251,7 @@ export default function Home() {
   const [showPurchase, setShowPurchase] = useState(false);
   const [showSupplier, setShowSupplier] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
+  const [showExpense, setShowExpense] = useState(false);
   const [payingPurchase, setPayingPurchase] = useState<Purchase | null>(null);
   const [returning, setReturning] = useState<{
     kind: ReturnKind;
@@ -290,6 +311,8 @@ export default function Home() {
           (p.barcode || "").includes(term))
     );
   }, [products, search, category]);
+  // تنبيهات تجمع نقص الرصيد وقرب انتهاء الصلاحية.
+  const alerts = useMemo(() => stockAlerts(state), [state]);
   const lowStock = products.filter(p => p.stock <= 8);
 
   /** إحصاءات اليوم مشتقة من الفواتير المحفوظة فعليًا، لا أرقام ثابتة. */
@@ -317,9 +340,10 @@ export default function Home() {
   const stockValue = useMemo(() => inventoryValue(state), [state]);
   const todayProfit = useMemo(() => {
     const today = new Date().toDateString();
-    return netProfitSummary(
+    return netIncome(
       state,
-      sales.filter(sale => new Date(sale.at).toDateString() === today)
+      sales.filter(sale => new Date(sale.at).toDateString() === today),
+      state.expenses.filter(e => new Date(e.at).toDateString() === today)
     );
   }, [sales, state]);
   const allTimeProfit = useMemo(() => profitSummary(sales), [sales]);
@@ -367,7 +391,7 @@ export default function Home() {
         }));
         replace(restored);
         toast.success(
-          `تم استرجاع ${restored.products.length} صنفًا و${restored.sales.length} فاتورة بيع و${restored.purchases.length} فاتورة شراء`
+          `تم استرجاع ${restored.products.length} صنفًا و${restored.sales.length} فاتورة بيع و${restored.purchases.length} فاتورة شراء و${restored.expenses.length} مصروفًا`
         );
       } catch {
         toast.error("تعذر قراءة الملف");
@@ -402,6 +426,8 @@ export default function Home() {
       // تكلفة المنتج تتحدد من فاتورة الشراء، لا من إدخال يدوي هنا.
       avgCost: 0,
       lastCost: 0,
+      reorderLevel: Number(fd.get("reorderLevel")) || 8,
+      expiryDate: String(fd.get("expiryDate") || ""),
     };
     runSafe(
       draft => {
@@ -504,6 +530,32 @@ export default function Home() {
         setEditingSupplier(null);
         toast.success(target ? "تم تعديل بيانات المورد" : "تمت إضافة المورد");
       }
+    );
+  };
+
+  const submitExpense = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    runSafe(
+      draft =>
+        addExpense(draft, {
+          category: String(fd.get("category")) as ExpenseCategory,
+          description: String(fd.get("description") || ""),
+          amount: Number(fd.get("amount")),
+          reference: String(fd.get("reference") || ""),
+        }),
+      () => {
+        setShowExpense(false);
+        toast.success("تم تسجيل المصروف");
+      }
+    );
+  };
+
+  const removeExpense = (expense: Expense) => {
+    if (!window.confirm(`حذف مصروف «${expense.description}»؟`)) return;
+    runSafe(
+      draft => deleteExpense(draft, expense.id),
+      () => toast.success("تم حذف المصروف")
     );
   };
 
@@ -740,9 +792,9 @@ export default function Home() {
                 tone="yellow"
               />
               <Metric
-                title="ربح اليوم"
-                value={money(todayProfit.grossProfit)}
-                note={`هامش ${todayProfit.margin}% بعد التكلفة`}
+                title="صافي ربح اليوم"
+                value={money(todayProfit.netProfit)}
+                note={`هامش ${todayProfit.netMargin}% بعد التكلفة والمصروفات`}
                 icon={<CircleDollarSign />}
                 tone="green"
               />
@@ -770,9 +822,13 @@ export default function Home() {
                 tone="orange"
               />
               <Metric
-                title="أصناف تحتاج طلبًا"
-                value={String(lowStock.length)}
-                note="رصيدها ٨ أو أقل"
+                title="تنبيهات المخزون"
+                value={String(alerts.length)}
+                note={
+                  alerts.some(a => a.kind === "expired")
+                    ? "تشمل أصنافًا منتهية الصلاحية"
+                    : "نقص رصيد أو قرب انتهاء صلاحية"
+                }
                 icon={<PackagePlus />}
                 tone="orange"
               />
@@ -817,7 +873,7 @@ export default function Home() {
                 <div className="panel-heading">
                   <div>
                     <span className="eyebrow">تحتاج انتباهك</span>
-                    <h3>أصناف قاربت على النفاد</h3>
+                    <h3>تنبيهات المخزون</h3>
                   </div>
                   <button
                     className="round-add"
@@ -826,23 +882,36 @@ export default function Home() {
                     <Plus size={17} />
                   </button>
                 </div>
-                {lowStock.map(p => (
-                  <div className="stock-row" key={p.id}>
-                    <div className={`product-thumb ${p.color}`}>
-                      <Sprout size={17} />
+                {alerts.length ? (
+                  alerts.slice(0, 6).map(alert => (
+                    <div
+                      className="stock-row"
+                      key={`${alert.productId}-${alert.kind}`}
+                    >
+                      <div className={`alert-thumb ${alert.kind}`}>
+                        {alert.kind === "expired" ||
+                        alert.kind === "expiring" ? (
+                          <CalendarDays size={16} />
+                        ) : (
+                          <Sprout size={17} />
+                        )}
+                      </div>
+                      <div className="stock-info">
+                        <strong>{alert.name}</strong>
+                        <span>{alert.message}</span>
+                      </div>
+                      <div className="stock-number">
+                        <b>{alert.stock}</b>
+                        <small>متبقي</small>
+                      </div>
                     </div>
-                    <div className="stock-info">
-                      <strong>{p.name}</strong>
-                      <span>
-                        {p.category} · {p.unit}
-                      </span>
-                    </div>
-                    <div className="stock-number">
-                      <b>{p.stock}</b>
-                      <small>متبقي</small>
-                    </div>
+                  ))
+                ) : (
+                  <div className="empty-cart">
+                    <ShieldCheck size={26} />
+                    <span>لا توجد تنبيهات — المخزون بحالة جيدة</span>
                   </div>
-                ))}
+                )}
                 <button
                   className="wide-soft-btn"
                   onClick={() => setActive("inventory")}
@@ -928,6 +997,8 @@ export default function Home() {
             onReturn={(kind: ReturnKind, source: Sale | Purchase) =>
               setReturning({ kind, source })
             }
+            onAddExpense={() => setShowExpense(true)}
+            onDeleteExpense={removeExpense}
           />
         )}
         <footer className="footer">
@@ -1120,6 +1191,41 @@ export default function Home() {
           </div>
         </Modal>
       )}
+      {showExpense && (
+        <Modal title="تسجيل مصروف" onClose={() => setShowExpense(false)}>
+          <form className="product-form" onSubmit={submitExpense}>
+            <label className="field">
+              <span>البند</span>
+              <select name="category" className="category-select" required>
+                {Object.entries(EXPENSE_LABELS).map(([id, label]) => (
+                  <option key={id} value={id}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <SupplierField
+              label="الوصف"
+              name="description"
+              placeholder="إيجار شهر سبتمبر"
+            />
+            <div className="form-grid">
+              <label className="field">
+                <span>القيمة</span>
+                <input name="amount" type="number" min="0" step="any" required />
+              </label>
+              <SupplierField
+                label="المرجع"
+                name="reference"
+                placeholder="رقم الإيصال (اختياري)"
+              />
+            </div>
+            <button className="primary-btn full" type="submit">
+              <Check size={18} /> حفظ المصروف
+            </button>
+          </form>
+        </Modal>
+      )}
       {payingPurchase && (
         <Modal
           title={`تسجيل دفعة — فاتورة #${payingPurchase.no}`}
@@ -1252,6 +1358,21 @@ export default function Home() {
                 name="barcode"
                 placeholder="امسح أو اكتب الرقم"
               />
+            </div>
+            <div className="form-grid">
+              <label className="field">
+                <span>حد إعادة الطلب</span>
+                <input
+                  name="reorderLevel"
+                  type="number"
+                  min="0"
+                  defaultValue={8}
+                />
+              </label>
+              <label className="field">
+                <span>تاريخ الصلاحية</span>
+                <input name="expiryDate" type="date" />
+              </label>
             </div>
             <button className="primary-btn full" type="submit">
               <PackagePlus size={18} /> حفظ المنتج
@@ -1412,6 +1533,8 @@ function ModuleView({
   onPayPurchase,
   onVoidPurchase,
   onReturn,
+  onAddExpense,
+  onDeleteExpense,
   search,
   setSearch,
   category,
@@ -1439,7 +1562,11 @@ function ModuleView({
       "الموردون",
       "بيانات الموردين وكشوف الحسابات والمبالغ المستحقة.",
     ],
-    accounts: ["الحسابات والمصروفات", "صورة أوضح للدخل والمصروف وصافي الحركة."],
+    accounts: ["الحسابات", "صورة أوضح للدخل والتكلفة وصافي الربح."],
+    expenses: [
+      "المصروفات",
+      "الإيجار والرواتب والكهرباء؛ بها يصبح صافي الربح دقيقًا.",
+    ],
     reports: ["التقارير", "ملخصات تساعدك على اتخاذ قرارك التالي."],
   };
   const [title, desc] = titles[active] || titles.inventory;
@@ -1538,7 +1665,9 @@ function ModuleView({
               <span>القسم</span>
               <span>الوحدة</span>
               <span>المخزون</span>
+              <span>التكلفة</span>
               <span>سعر البيع</span>
+              <span>الصلاحية</span>
               <span>إجراء</span>
             </div>
             {products.map((p: Product) => (
@@ -1554,7 +1683,13 @@ function ModuleView({
                 <span className={p.stock <= 8 ? "danger-text" : "good-text"}>
                   {p.stock} {p.unit}
                 </span>
+                <span>{p.avgCost > 0 ? money(p.avgCost) : "—"}</span>
                 <span>{money(p.price)}</span>
+                <span className={expiryTone(p.expiryDate)}>
+                  {p.expiryDate
+                    ? new Date(p.expiryDate).toLocaleDateString("ar-EG")
+                    : "—"}
+                </span>
                 <button
                   className="small-add"
                   onClick={() =>
@@ -1678,6 +1813,13 @@ function ModuleView({
           onAdd={onAddSupplier}
           onEdit={onEditSupplier}
         />
+      ) : active === "expenses" ? (
+        <ExpensesBoard
+          state={state}
+          money={moneyFn}
+          onAdd={onAddExpense}
+          onDelete={onDeleteExpense}
+        />
       ) : active === "reports" ? (
         <ReportsBoard state={state} />
       ) : active === "customers" ? (
@@ -1711,9 +1853,9 @@ const periods: { id: string; label: string; days: number | null }[] = [
 
 function ReportsBoard({ state }: { state: DbState }) {
   const [period, setPeriod] = useState("month");
-  const [tab, setTab] = useState<"sales" | "purchases" | "costs" | "profit">(
-    "profit"
-  );
+  const [tab, setTab] = useState<
+    "sales" | "purchases" | "costs" | "profit" | "expenses"
+  >("profit");
 
   const range = useMemo(() => {
     const found = periods.find(p => p.id === period);
@@ -1739,9 +1881,14 @@ function ReportsBoard({ state }: { state: DbState }) {
   );
 
   // الربح بعد خصم مرتجعات البيع، لا الربح الإجمالي فقط.
+  const scopedExpenses = useMemo(
+    () => state.expenses.filter(e => inRange(e.at)),
+    [state.expenses, inRange]
+  );
+  // صافي الربح: بعد المرتجعات والتكلفة والمصروفات التشغيلية.
   const profit = useMemo(
-    () => netProfitSummary(state, scopedSales),
-    [state, scopedSales]
+    () => netIncome(state, scopedSales, scopedExpenses),
+    [state, scopedSales, scopedExpenses]
   );
   const purchasesSum = purchasesTotal(scopedPurchases);
   const stockValue = inventoryValue(state);
@@ -1857,6 +2004,20 @@ function ReportsBoard({ state }: { state: DbState }) {
         ],
         "تقرير-تكلفة-الأصناف"
       );
+    if (tab === "expenses")
+      return download(
+        [
+          ["التاريخ", "البند", "الوصف", "القيمة", "المرجع"],
+          ...scopedExpenses.map(e => [
+            new Date(e.at).toLocaleString("ar-EG"),
+            EXPENSE_LABELS[e.category],
+            e.description,
+            String(e.amount),
+            e.reference,
+          ]),
+        ],
+        "تقرير-المصروفات"
+      );
     if (tab === "profit")
       return download(
         [
@@ -1906,7 +2067,7 @@ function ReportsBoard({ state }: { state: DbState }) {
       )
       .join("");
     win.document.write(
-      `<html dir="rtl"><head><meta charset="utf-8"><title>تقرير الربحية</title><style>${styles}</style></head><body><h1>دفتر الزراعة — تقرير الربحية</h1><p>الفترة: ${periodLabel} · طُبع في ${new Date().toLocaleString("ar-EG")}</p><div class="sum"><div>المبيعات<b>${money(profit.revenue)}</b></div><div>تكلفة البضاعة المباعة<b>${money(profit.cogs)}</b></div><div>إجمالي الربح<b>${money(profit.grossProfit)}</b></div><div>هامش الربح<b>${profit.margin}%</b></div><div>المشتريات<b>${money(purchasesSum)}</b></div><div>مستحق للموردين<b>${money(payables)}</b></div></div><table><thead><tr><th>الصنف</th><th>الكمية</th><th>المبيعات</th><th>التكلفة</th><th>الربح</th></tr></thead><tbody>${rows}</tbody></table><script>window.onload=function(){window.print()}</script></body></html>`
+      `<html dir="rtl"><head><meta charset="utf-8"><title>تقرير الربحية</title><style>${styles}</style></head><body><h1>دفتر الزراعة — تقرير الربحية</h1><p>الفترة: ${periodLabel} · طُبع في ${new Date().toLocaleString("ar-EG")}</p><div class="sum"><div>المبيعات<b>${money(profit.revenue)}</b></div><div>تكلفة البضاعة المباعة<b>${money(profit.cogs)}</b></div><div>إجمالي الربح<b>${money(profit.grossProfit)}</b></div><div>هامش الربح<b>${profit.margin}%</b></div><div>المصروفات<b>${money(profit.expenses)}</b></div><div>صافي الربح<b>${money(profit.netProfit)}</b></div><div>المشتريات<b>${money(purchasesSum)}</b></div><div>مستحق للموردين<b>${money(payables)}</b></div></div><table><thead><tr><th>الصنف</th><th>الكمية</th><th>المبيعات</th><th>التكلفة</th><th>الربح</th></tr></thead><tbody>${rows}</tbody></table><script>window.onload=function(){window.print()}</script></body></html>`
     );
     win.document.close();
   };
@@ -1916,6 +2077,7 @@ function ReportsBoard({ state }: { state: DbState }) {
     ["sales", "المبيعات"],
     ["purchases", "المشتريات"],
     ["costs", "تكلفة الأصناف"],
+    ["expenses", "المصروفات"],
   ];
 
   return (
@@ -1977,6 +2139,20 @@ function ReportsBoard({ state }: { state: DbState }) {
           <span>إجمالي الربح</span>
           <strong>{money(profit.grossProfit)}</strong>
           <em>هامش {profit.margin}%</em>
+        </div>
+        <div
+          className={
+            profit.netProfit >= 0
+              ? "report-kpi stock-kpi"
+              : "report-kpi alert-kpi"
+          }
+        >
+          <div className="report-kpi-icon">
+            <Calculator />
+          </div>
+          <span>صافي الربح</span>
+          <strong>{money(profit.netProfit)}</strong>
+          <em>بعد مصروفات {money(profit.expenses)}</em>
         </div>
         <div className="report-kpi stock-kpi">
           <div className="report-kpi-icon">
@@ -2063,6 +2239,18 @@ function ReportsBoard({ state }: { state: DbState }) {
             </>
           )}
         </>
+      )}
+      {tab === "expenses" && (
+        <ReportTable
+          empty="لا توجد مصروفات في هذه الفترة"
+          head={["التاريخ", "البند", "الوصف", "القيمة"]}
+          rows={scopedExpenses.map(e => [
+            new Date(e.at).toLocaleDateString("ar-EG"),
+            EXPENSE_LABELS[e.category],
+            e.description,
+            money(e.amount),
+          ])}
+        />
       )}
       {tab === "costs" && (
         <ReportTable
@@ -2194,8 +2382,15 @@ function AccountsBoard({ state }: { state: DbState }) {
       date.getFullYear() === now.getFullYear()
     );
   });
-  const all = netProfitSummary(state, state.sales);
-  const month = netProfitSummary(state, thisMonthSales);
+  const all = netIncome(state, state.sales, state.expenses);
+  const monthExpenses = state.expenses.filter(e => {
+    const date = new Date(e.at);
+    return (
+      date.getMonth() === now.getMonth() &&
+      date.getFullYear() === now.getFullYear()
+    );
+  });
+  const month = netIncome(state, thisMonthSales, monthExpenses);
   const purchasesSum = purchasesTotal(state.purchases);
   const stockValue = inventoryValue(state);
   const payables = payablesTotal(state);
@@ -2231,12 +2426,38 @@ function AccountsBoard({ state }: { state: DbState }) {
           <strong>{money(all.grossProfit)}</strong>
           <em>هامش {all.margin}%</em>
         </div>
+        <div className="report-kpi alert-kpi">
+          <div className="report-kpi-icon">
+            <WalletCards />
+          </div>
+          <span>المصروفات التشغيلية</span>
+          <strong>{money(all.expenses)}</strong>
+          <em>{state.expenses.length} مصروف مسجل</em>
+        </div>
+        <div
+          className={
+            all.netProfit >= 0
+              ? "report-kpi profit-kpi"
+              : "report-kpi alert-kpi"
+          }
+        >
+          <div className="report-kpi-icon">
+            <Calculator />
+          </div>
+          <span>صافي الربح</span>
+          <strong>{money(all.netProfit)}</strong>
+          <em>
+            {all.netProfit >= 0
+              ? `هامش صافٍ ${all.netMargin}%`
+              : "خسارة — راجع المصروفات"}
+          </em>
+        </div>
         <div className="report-kpi sales-kpi">
           <div className="report-kpi-icon">
             <CalendarDays />
           </div>
-          <span>ربح هذا الشهر</span>
-          <strong>{money(month.grossProfit)}</strong>
+          <span>صافي ربح هذا الشهر</span>
+          <strong>{money(month.netProfit)}</strong>
           <em>من مبيعات {money(month.revenue)}</em>
         </div>
         <div className="report-kpi stock-kpi">
@@ -2309,17 +2530,7 @@ function AccountsBoard({ state }: { state: DbState }) {
         </div>
       )}
 
-      <div className="report-section-label">
-        <span className="eyebrow">ملاحظة</span>
-        <b>المصروفات التشغيلية</b>
-      </div>
-      <div className="panel">
-        <p style={{ margin: 0, fontSize: 13, color: "#7d8d84", lineHeight: 2 }}>
-          الأرقام أعلاه تعرض الربح الإجمالي (المبيعات ناقص تكلفة البضاعة
-          المباعة). صافي الربح النهائي يحتاج تسجيل المصروفات التشغيلية مثل
-          الإيجار والرواتب، وهي مرحلة قادمة.
-        </p>
-      </div>
+
     </>
   );
 }
