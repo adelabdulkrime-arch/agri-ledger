@@ -10,6 +10,9 @@ import type {
   StockMove,
   StockMoveType,
   Supplier,
+  ReturnKind,
+  ReturnLine,
+  StockReturn,
 } from "./types";
 import { nextId, nextNumber } from "./store";
 
@@ -598,6 +601,217 @@ export function payablesTotal(state: DbState) {
       .filter(p => p.status === "confirmed")
       .reduce((sum, p) => sum + p.balance, 0)
   );
+}
+
+
+// ------------------------------------------------------------ المرتجعات
+
+export type ReturnInput = {
+  refNo: number;
+  at?: string;
+  reason?: string;
+  lines: { productId: number; qty: number }[];
+};
+
+/** الكميات المرتجعة سابقًا من فاتورة معينة، لمنع تجاوز الكمية الأصلية. */
+export function returnedQuantities(
+  state: DbState,
+  kind: ReturnKind,
+  refNo: number
+) {
+  const map = new Map<number, number>();
+  state.returns
+    .filter(r => r.kind === kind && r.refNo === refNo)
+    .forEach(r =>
+      r.lines.forEach(line =>
+        map.set(line.productId, (map.get(line.productId) || 0) + line.qty)
+      )
+    );
+  return map;
+}
+
+/**
+ * مرتجع بيع: البضاعة تعود للمخزن، ونعكس تكلفتها من COGS.
+ * نستخدم نفس تكلفة الوحدة المثبتة في الفاتورة الأصلية حتى يبقى الربح صحيحًا.
+ */
+export function postSaleReturn(
+  state: DbState,
+  input: ReturnInput
+): StockReturn {
+  const sale = state.sales.find(s => s.no === input.refNo);
+  if (!sale) fail("فاتورة البيع غير موجودة");
+  if (!input.lines?.length) fail("أضف صنفًا واحدًا على الأقل للمرتجع");
+
+  const already = returnedQuantities(state, "sale", sale.no);
+  const at = input.at || new Date().toISOString();
+  const lines: ReturnLine[] = input.lines.map(raw => {
+    const original = sale.lines.find(l => l.id === raw.productId);
+    if (!original) fail("هذا الصنف ليس ضمن الفاتورة الأصلية");
+    const qty = Number(raw.qty);
+    if (!Number.isFinite(qty) || qty <= 0)
+      fail(`الكمية يجب أن تكون أكبر من صفر: ${original.name}`);
+
+    const remaining = original.qty - (already.get(raw.productId) || 0);
+    if (qty > remaining)
+      fail(
+        `الكمية المتاحة للإرجاع من ${original.name} هي ${remaining} فقط`
+      );
+
+    return {
+      productId: original.id,
+      name: original.name,
+      unit: original.unit,
+      qty,
+      unitPrice: original.price,
+      // التكلفة من الفاتورة الأصلية، لا من متوسط اليوم.
+      unitCost: original.unitCost || 0,
+      total: round2(qty * original.price),
+    };
+  });
+
+  lines.forEach(line => {
+    recordMove(state, {
+      productId: line.productId,
+      productName: line.name,
+      type: "SALE_RETURN",
+      qty: line.qty,
+      unitCost: line.unitCost,
+      refType: "sale_return",
+      refNo: sale.no,
+      at,
+      note: `مرتجع بيع من فاتورة #${sale.no}`,
+    });
+  });
+
+  const entry: StockReturn = {
+    no: nextNumber(state.returns, 8000),
+    kind: "sale",
+    refNo: sale.no,
+    at,
+    party: sale.customer,
+    lines,
+    total: round2(lines.reduce((sum, l) => sum + l.total, 0)),
+    cogs: round2(lines.reduce((sum, l) => sum + l.unitCost * l.qty, 0)),
+    reason: (input.reason || "").trim(),
+  };
+  state.returns.unshift(entry);
+  return entry;
+}
+
+/**
+ * مرتجع شراء: البضاعة تعود للمورد، فينقص المخزون وينقص ما علينا له.
+ */
+export function postPurchaseReturn(
+  state: DbState,
+  input: ReturnInput
+): StockReturn {
+  const purchase = state.purchases.find(p => p.no === input.refNo);
+  if (!purchase) fail("فاتورة الشراء غير موجودة");
+  if (purchase.status === "void") fail("الفاتورة ملغاة");
+  if (!input.lines?.length) fail("أضف صنفًا واحدًا على الأقل للمرتجع");
+
+  const already = returnedQuantities(state, "purchase", purchase.no);
+  const at = input.at || new Date().toISOString();
+
+  const lines: ReturnLine[] = input.lines.map(raw => {
+    const original = purchase.lines.find(l => l.productId === raw.productId);
+    if (!original) fail("هذا الصنف ليس ضمن فاتورة الشراء");
+    const qty = Number(raw.qty);
+    if (!Number.isFinite(qty) || qty <= 0)
+      fail(`الكمية يجب أن تكون أكبر من صفر: ${original.name}`);
+
+    const remaining = original.qty - (already.get(raw.productId) || 0);
+    if (qty > remaining)
+      fail(`الكمية المتاحة للإرجاع من ${original.name} هي ${remaining} فقط`);
+
+    const product = state.products.find(p => p.id === raw.productId);
+    if (!product) fail(`الصنف غير موجود: ${original.name}`);
+    // لا نرجع أكثر مما هو موجود فعليًا في المخزن.
+    if (product.stock < qty)
+      fail(
+        `الرصيد الحالي من ${original.name} هو ${product.stock}، لا يكفي للإرجاع`
+      );
+
+    const unitCost = round2(original.total / original.qty);
+    return {
+      productId: original.productId,
+      name: original.name,
+      unit: original.unit,
+      qty,
+      unitPrice: unitCost,
+      unitCost,
+      total: round2(qty * unitCost),
+    };
+  });
+
+  lines.forEach(line => {
+    recordMove(state, {
+      productId: line.productId,
+      productName: line.name,
+      type: "PURCHASE_RETURN",
+      qty: -line.qty,
+      unitCost: line.unitCost,
+      refType: "purchase_return",
+      refNo: purchase.no,
+      at,
+      note: `مرتجع شراء إلى ${purchase.supplierName}`,
+    });
+  });
+
+  const total = round2(lines.reduce((sum, l) => sum + l.total, 0));
+  const entry: StockReturn = {
+    no: nextNumber(state.returns, 8000),
+    kind: "purchase",
+    refNo: purchase.no,
+    at,
+    party: purchase.supplierName,
+    supplierId: purchase.supplierId,
+    lines,
+    total,
+    cogs: 0,
+    reason: (input.reason || "").trim(),
+  };
+  state.returns.unshift(entry);
+
+  // قيمة المرتجع تقلل ما علينا للمورد.
+  state.supplierLedger.push({
+    id: nextId(state.supplierLedger),
+    supplierId: purchase.supplierId,
+    at,
+    type: "مرتجع شراء",
+    refNo: purchase.no,
+    debit: total,
+    credit: 0,
+    note: `مرتجع من فاتورة #${purchase.no}`,
+  });
+
+  // نعكس أثر المرتجع على الفاتورة حتى يبقى الرصيد المتبقي صحيحًا.
+  purchase.total = round2(purchase.total - total);
+  purchase.balance = round2(Math.max(0, purchase.total - purchase.paid));
+
+  return entry;
+}
+
+/** صافي المبيعات والربح بعد خصم مرتجعات البيع. */
+export function netProfitSummary(state: DbState, sales: Sale[]) {
+  const gross = profitSummary(sales);
+  const saleNumbers = new Set(sales.map(s => s.no));
+  const related = state.returns.filter(
+    r => r.kind === "sale" && saleNumbers.has(r.refNo)
+  );
+  const returnsTotal = round2(related.reduce((sum, r) => sum + r.total, 0));
+  const returnsCogs = round2(related.reduce((sum, r) => sum + r.cogs, 0));
+
+  const revenue = round2(gross.revenue - returnsTotal);
+  const cogs = round2(gross.cogs - returnsCogs);
+  const grossProfit = round2(revenue - cogs);
+  return {
+    revenue,
+    cogs,
+    grossProfit,
+    returnsTotal,
+    margin: revenue > 0 ? round2((grossProfit / revenue) * 100) : 0,
+  };
 }
 
 export const MOVE_LABELS: Record<StockMoveType, string> = {

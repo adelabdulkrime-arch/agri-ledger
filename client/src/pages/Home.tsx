@@ -52,10 +52,13 @@ import {
   createSupplier,
   editPurchase,
   inventoryValue,
+  netProfitSummary,
   payPurchase,
   payablesTotal,
   postPurchase,
+  postPurchaseReturn,
   postSale,
+  postSaleReturn,
   profitSummary,
   purchasesTotal,
   round2,
@@ -67,6 +70,7 @@ import {
 import { emptyState, migrate } from "../data/store";
 import type {
   DbState,
+  ReturnKind,
   PaymentMethod,
   Product,
   Purchase,
@@ -77,6 +81,8 @@ const BarcodeScanner = lazy(() => import("../components/BarcodeScanner"));
 const PurchaseDialog = lazy(() => import("../components/PurchaseDialog"));
 import SuppliersBoard from "../components/SuppliersBoard";
 import PurchasesBoard from "../components/PurchasesBoard";
+import PaymentDialog from "../components/PaymentDialog";
+import ReturnDialog from "../components/ReturnDialog";
 import { useUsbScanner } from "../hooks/useUsbScanner";
 import { usePersistFn } from "../hooks/usePersistFn";
 
@@ -225,6 +231,11 @@ export default function Home() {
   const [showPurchase, setShowPurchase] = useState(false);
   const [showSupplier, setShowSupplier] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
+  const [payingPurchase, setPayingPurchase] = useState<Purchase | null>(null);
+  const [returning, setReturning] = useState<{
+    kind: ReturnKind;
+    source: Sale | Purchase;
+  } | null>(null);
   const [showScanner, setShowScanner] = useState(false);
   const [scanFeedback, setScanFeedback] = useState("");
   const [notice, setNotice] = useState("آخر حفظ محلي منذ لحظات");
@@ -306,10 +317,11 @@ export default function Home() {
   const stockValue = useMemo(() => inventoryValue(state), [state]);
   const todayProfit = useMemo(() => {
     const today = new Date().toDateString();
-    return profitSummary(
+    return netProfitSummary(
+      state,
       sales.filter(sale => new Date(sale.at).toDateString() === today)
     );
-  }, [sales]);
+  }, [sales, state]);
   const allTimeProfit = useMemo(() => profitSummary(sales), [sales]);
   const purchasesSum = useMemo(() => purchasesTotal(purchases), [purchases]);
   const payables = useMemo(() => payablesTotal(state), [state]);
@@ -495,15 +507,40 @@ export default function Home() {
     );
   };
 
-  const handlePay = (purchase: Purchase) => {
-    const input = window.prompt(
-      `المتبقي على فاتورة #${purchase.no}: ${money(purchase.balance)}
-أدخل قيمة الدفعة:`
-    );
-    if (input === null) return;
+  const handlePay = (purchase: Purchase) => setPayingPurchase(purchase);
+
+  const submitPayment = (amount: number) => {
+    if (!payingPurchase) return;
     runSafe(
-      draft => payPurchase(draft, purchase.no, Number(input)),
-      () => toast.success("تم تسجيل الدفعة وتحديث حساب المورد")
+      draft => payPurchase(draft, payingPurchase.no, amount),
+      () => {
+        setPayingPurchase(null);
+        toast.success("تم تسجيل الدفعة وتحديث حساب المورد");
+      }
+    );
+  };
+
+  /** مرتجع بيع أو شراء؛ كلاهما يعكس المخزون في معاملة واحدة. */
+  const submitReturn = (input: {
+    refNo: number;
+    reason: string;
+    lines: { productId: number; qty: number }[];
+  }) => {
+    const kind = returning?.kind;
+    if (!kind) return;
+    runSafe(
+      draft =>
+        kind === "sale"
+          ? postSaleReturn(draft, input)
+          : postPurchaseReturn(draft, input),
+      () => {
+        setReturning(null);
+        toast.success(
+          kind === "sale"
+            ? "تم تسجيل مرتجع البيع وإعادة الكمية للمخزن"
+            : "تم تسجيل مرتجع الشراء وتحديث حساب المورد"
+        );
+      }
     );
   };
 
@@ -888,6 +925,9 @@ export default function Home() {
             }}
             onPayPurchase={handlePay}
             onVoidPurchase={handleVoid}
+            onReturn={(kind: ReturnKind, source: Sale | Purchase) =>
+              setReturning({ kind, source })
+            }
           />
         )}
         <footer className="footer">
@@ -1078,6 +1118,32 @@ export default function Home() {
               <FilePlus2 size={18} /> حفظ المرفق
             </button>
           </div>
+        </Modal>
+      )}
+      {payingPurchase && (
+        <Modal
+          title={`تسجيل دفعة — فاتورة #${payingPurchase.no}`}
+          onClose={() => setPayingPurchase(null)}
+        >
+          <PaymentDialog
+            purchase={payingPurchase}
+            money={money}
+            onSubmit={submitPayment}
+          />
+        </Modal>
+      )}
+      {returning && (
+        <Modal
+          title={returning.kind === "sale" ? "مرتجع بيع" : "مرتجع شراء"}
+          onClose={() => setReturning(null)}
+        >
+          <ReturnDialog
+            state={state}
+            kind={returning.kind}
+            source={returning.source}
+            money={money}
+            onSubmit={submitReturn}
+          />
         </Modal>
       )}
       {showPurchase && (
@@ -1345,6 +1411,7 @@ function ModuleView({
   onEditSupplier,
   onPayPurchase,
   onVoidPurchase,
+  onReturn,
   search,
   setSearch,
   category,
@@ -1421,6 +1488,13 @@ function ModuleView({
                   </span>
                 </div>
                 <div className="ledger-total">{money(sale.total)}</div>
+                <button
+                  className="row-more"
+                  onClick={() => onReturn("sale", sale)}
+                  title="مرتجع من هذه الفاتورة"
+                >
+                  مرتجع
+                </button>
               </div>
             ))}
           </div>
@@ -1595,6 +1669,7 @@ function ModuleView({
           onNew={onNewPurchase}
           onPay={onPayPurchase}
           onVoid={onVoidPurchase}
+          onReturn={p => onReturn("purchase", p)}
         />
       ) : active === "suppliers" ? (
         <SuppliersBoard
@@ -1663,7 +1738,11 @@ function ReportsBoard({ state }: { state: DbState }) {
     [state.purchases, inRange]
   );
 
-  const profit = useMemo(() => profitSummary(scopedSales), [scopedSales]);
+  // الربح بعد خصم مرتجعات البيع، لا الربح الإجمالي فقط.
+  const profit = useMemo(
+    () => netProfitSummary(state, scopedSales),
+    [state, scopedSales]
+  );
   const purchasesSum = purchasesTotal(scopedPurchases);
   const stockValue = inventoryValue(state);
   const payables = payablesTotal(state);
@@ -1885,7 +1964,11 @@ function ReportsBoard({ state }: { state: DbState }) {
           </div>
           <span>تكلفة البضاعة المباعة</span>
           <strong>{money(profit.cogs)}</strong>
-          <em>محسوبة من تكلفة كل صنف وقت بيعه</em>
+          <em>
+            {profit.returnsTotal > 0
+              ? `بعد مرتجعات ${money(profit.returnsTotal)}`
+              : "محسوبة من تكلفة كل صنف وقت بيعه"}
+          </em>
         </div>
         <div className="report-kpi profit-kpi">
           <div className="report-kpi-icon">
@@ -2111,8 +2194,8 @@ function AccountsBoard({ state }: { state: DbState }) {
       date.getFullYear() === now.getFullYear()
     );
   });
-  const all = profitSummary(state.sales);
-  const month = profitSummary(thisMonthSales);
+  const all = netProfitSummary(state, state.sales);
+  const month = netProfitSummary(state, thisMonthSales);
   const purchasesSum = purchasesTotal(state.purchases);
   const stockValue = inventoryValue(state);
   const payables = payablesTotal(state);
@@ -2134,7 +2217,11 @@ function AccountsBoard({ state }: { state: DbState }) {
           </div>
           <span>تكلفة البضاعة المباعة</span>
           <strong>{money(all.cogs)}</strong>
-          <em>مثبتة وقت كل عملية بيع</em>
+          <em>
+            {all.returnsTotal > 0
+              ? `بعد مرتجعات ${money(all.returnsTotal)}`
+              : "مثبتة وقت كل عملية بيع"}
+          </em>
         </div>
         <div className="report-kpi profit-kpi">
           <div className="report-kpi-icon">

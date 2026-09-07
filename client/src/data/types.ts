@@ -129,6 +129,37 @@ export type SupplierLedgerEntry = {
   note: string;
 };
 
+
+export type ReturnKind = "sale" | "purchase";
+
+export type ReturnLine = {
+  productId: number;
+  name: string;
+  unit: string;
+  qty: number;
+  /** سعر الوحدة المسترد؛ سعر البيع للعميل أو تكلفة الشراء للمورد. */
+  unitPrice: number;
+  /** تكلفة الوحدة المستخدمة لعكس COGS في مرتجع البيع. */
+  unitCost: number;
+  total: number;
+};
+
+export type StockReturn = {
+  no: number;
+  kind: ReturnKind;
+  /** رقم الفاتورة الأصلية التي يرتجع منها. */
+  refNo: number;
+  at: string;
+  /** اسم العميل أو المورد حسب نوع المرتجع. */
+  party: string;
+  supplierId?: number;
+  lines: ReturnLine[];
+  total: number;
+  /** تكلفة البضاعة العائدة، تُخصم من COGS الأصلي. */
+  cogs: number;
+  reason: string;
+};
+
 /** الحالة الكاملة المحفوظة؛ كل ما يخص المحل في مكان واحد. */
 export type DbState = {
   version: number;
@@ -138,4 +169,5 @@ export type DbState = {
   purchases: Purchase[];
   stockMoves: StockMove[];
   supplierLedger: SupplierLedgerEntry[];
+  returns: StockReturn[];
 };

@@ -10,6 +10,7 @@ type Props = {
   onNew: () => void;
   onPay: (purchase: Purchase) => void;
   onVoid: (purchase: Purchase) => void;
+  onReturn: (purchase: Purchase) => void;
 };
 
 const statusFilters = [
@@ -33,6 +34,7 @@ export default function PurchasesBoard({
   onNew,
   onPay,
   onVoid,
+  onReturn,
 }: Props) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
@@ -174,13 +176,22 @@ export default function PurchasesBoard({
                         </button>
                       )}
                       {p.status === "confirmed" && (
-                        <button
-                          className="row-more"
-                          onClick={() => onVoid(p)}
-                          title="إلغاء الفاتورة"
-                        >
-                          إلغاء
-                        </button>
+                        <>
+                          <button
+                            className="row-more"
+                            onClick={() => onReturn(p)}
+                            title="مرتجع شراء"
+                          >
+                            مرتجع
+                          </button>
+                          <button
+                            className="row-more"
+                            onClick={() => onVoid(p)}
+                            title="إلغاء الفاتورة"
+                          >
+                            إلغاء
+                          </button>
+                        </>
                       )}
                     </td>
                   </tr>
