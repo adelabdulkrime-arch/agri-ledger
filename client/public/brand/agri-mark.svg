@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="دفتر الزراعة">
+  <rect width="512" height="512" rx="112" fill="#173e4b"/>
+  <!-- الدفتر المفتوح -->
+  <path d="M96 168c52-22 104-22 156 0v192c-52-22-104-22-156 0V168z" fill="#fffdf8"/>
+  <path d="M416 168c-52-22-104-22-156 0v192c52-22 104-22 156 0V168z" fill="#f3ead6"/>
+  <path d="M256 168v192" stroke="#173e4b" stroke-width="14" stroke-linecap="round"/>
+  <!-- ورقة النبات -->
+  <path d="M256 316c0-62 34-104 92-116-4 62-38 104-92 116z" fill="#2f7d4a"/>
+  <path d="M256 316c0-62-34-104-92-116 4 62 38 104 92 116z" fill="#3f9a5c"/>
+  <path d="M256 356v-64" stroke="#2f7d4a" stroke-width="16" stroke-linecap="round"/>
+  <!-- سطر الحساب الذهبي -->
+  <rect x="150" y="392" width="212" height="18" rx="9" fill="#f2b441"/>
+</svg>

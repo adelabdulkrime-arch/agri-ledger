@@ -1,0 +1,25 @@
+{
+  "name": "دفتر الزراعة — نظام المبيعات والمخزون",
+  "short_name": "دفتر الزراعة",
+  "description": "نظام مبيعات ومخزون ومحاسبة خفيف لمحل الأسمدة والمعدات الزراعية",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f6ef",
+  "theme_color": "#173e4b",
+  "dir": "rtl",
+  "lang": "ar",
+  "icons": [
+    {
+      "src": "/brand/agri-mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/brand/agri-mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
