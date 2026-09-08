@@ -112,7 +112,8 @@ import { useUsbScanner } from "../hooks/useUsbScanner";
 import { useInstallPrompt } from "../hooks/useInstallPrompt";
 import { usePersistFn } from "../hooks/usePersistFn";
 
-const logoUrl = "/brand/agri-mark.svg";
+const assetBase = import.meta.env.BASE_URL || "/";
+const logoUrl = `${assetBase}brand/agri-mark.svg`;
 
 type CartLine = Product & {
   /** الكمية بوحدة البيع المختارة، لا بالوحدة الأساسية. */
@@ -960,7 +961,7 @@ export default function Home() {
                 </div>
               </div>
               <div className="hero-art">
-                <img src="/brand/dashboard-art.svg" alt="" />
+                <img src={`${assetBase}brand/dashboard-art.svg`} alt="" />
               </div>
             </section>
             <section className="metrics">
