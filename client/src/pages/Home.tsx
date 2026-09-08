@@ -83,7 +83,12 @@ import {
   updateSupplier,
   voidPurchase,
 } from "../data/operations";
-import { emptyState, migrate } from "../data/store";
+import {
+  StorageError,
+  emptyState,
+  migrate,
+  storageUsage,
+} from "../data/store";
 import type {
   DbState,
   Expense,
@@ -233,7 +238,7 @@ export default function Home() {
     () => [...seedProducts, ...catalogProducts],
     []
   );
-  const { state, run, replace } = useDb(catalogSeed);
+  const { state, run, replace, recovered, bootError } = useDb(catalogSeed);
   const { products, sales, suppliers, purchases, stockMoves } = state;
 
   /** ينفذ عملية على البيانات ويعرض رسالة مفهومة عند الفشل. */
@@ -244,9 +249,11 @@ export default function Home() {
         onDone?.(result);
         return true;
       } catch (error) {
+        const known =
+          error instanceof OperationError || error instanceof StorageError;
         toast.error(
-          error instanceof OperationError
-            ? error.message
+          known
+            ? (error as Error).message
             : "تعذر إتمام العملية؛ لم يتم حفظ أي تغيير"
         );
         return false;
@@ -259,6 +266,8 @@ export default function Home() {
   const [showSale, setShowSale] = useState(false);
   const [showProduct, setShowProduct] = useState(false);
   const [showBackup, setShowBackup] = useState(false);
+  // يُحسب مع كل تغيير في البيانات ليعكس الحجم الفعلي لا تقديرًا.
+  const usage = useMemo(() => storageUsage(), [state]);
   const [showInvoiceCapture, setShowInvoiceCapture] = useState(false);
   const [invoicePhoto, setInvoicePhoto] = useState<string | null>(null);
   const [cart, setCart] = useState<CartLine[]>([]);
@@ -299,6 +308,52 @@ export default function Home() {
 
   // قارئ USB يعمل دائمًا في شاشة البيع، دون الحاجة لفتح نافذة الكاميرا.
   useUsbScanner(handleBarcode, showSale || showScanner);
+
+  // إذا تعافى النظام من ملف تالف، يجب أن يعرف المستخدم ليتحقق من بياناته.
+  useEffect(() => {
+    if (bootError) toast.error(bootError, { duration: 15000 });
+  }, [bootError]);
+
+  // تنبيه واضح عند تأخر النسخ الاحتياطي أو امتلاء المساحة، مرة عند الإقلاع.
+  useEffect(() => {
+    const overdue =
+      !lastBackup ||
+      Date.now() - new Date(lastBackup).getTime() > 30 * 24 * 60 * 60 * 1000;
+    const hasData = state.sales.length > 0 || state.purchases.length > 0;
+    if (!hasData) return;
+
+    if (usage.percent >= 80) {
+      toast.error(
+        `مساحة البيانات ممتلئة ${usage.percent}%. صدّر نسخة احتياطية الآن.`,
+        {
+          duration: 15000,
+          action: { label: "نسخة احتياطية", onClick: () => setShowBackup(true) },
+        }
+      );
+      return;
+    }
+    if (overdue) {
+      toast.warning(
+        lastBackup
+          ? "مضى أكثر من شهر على آخر نسخة احتياطية."
+          : "لم تُنشئ نسخة احتياطية بعد. بياناتك على هذا الجهاز فقط.",
+        {
+          duration: 12000,
+          action: { label: "صدّر الآن", onClick: () => setShowBackup(true) },
+        }
+      );
+    }
+    // مرة واحدة عند الإقلاع فقط؛ إزعاج المستخدم كل عملية يجعله يتجاهل التنبيه.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (recovered)
+      toast.warning(
+        "تعذّرت قراءة الملف الأساسي؛ تم استرجاع آخر نسخة أمان. راجع آخر عملياتك.",
+        { duration: 12000 }
+      );
+  }, [recovered]);
 
   // المخزن يحفظ فور كل عملية؛ هنا نعرض الحالة للمستخدم فقط.
   useEffect(() => {
@@ -410,6 +465,22 @@ export default function Home() {
           ...p,
           barcode: p.barcode || `62810000${i + 1}`,
         }));
+
+        // الاستعادة تمحو البيانات الحالية؛ نعرض المقارنة قبل التنفيذ
+        // لأن استيراد ملف خاطئ يعني فقدان سجل شهور.
+        const current = `الحالي: ${state.sales.length} فاتورة بيع · ${state.purchases.length} فاتورة شراء · ${state.expenses.length} مصروف`;
+        const incoming = `الملف: ${restored.sales.length} فاتورة بيع · ${restored.purchases.length} فاتورة شراء · ${restored.expenses.length} مصروف`;
+        const stamp = data.exportedAt
+          ? `تاريخ النسخة: ${new Date(data.exportedAt).toLocaleString("ar-EG")}`
+          : "الملف لا يحمل تاريخ تصدير";
+
+        if (
+          !window.confirm(
+            `سيُستبدل كل ما في الجهاز ببيانات هذا الملف.\n\n${current}\n${incoming}\n${stamp}\n\nهل تريد المتابعة؟`
+          )
+        )
+          return;
+
         replace(restored);
         toast.success(
           `تم استرجاع ${restored.products.length} صنفًا و${restored.sales.length} فاتورة بيع و${restored.purchases.length} فاتورة شراء و${restored.expenses.length} مصروفًا`
@@ -1573,6 +1644,32 @@ export default function Home() {
                 ? "مطلوبة هذا الشهر"
                 : "محدّثة"}
             </b>
+          </div>
+
+          <div className="storage-meter">
+            <div className="storage-head">
+              <span>مساحة البيانات على الجهاز</span>
+              <b className={usage.percent >= 80 ? "danger-text" : ""}>
+                {usage.usedKb} من {usage.limitKb} كيلوبايت ({usage.percent}%)
+              </b>
+            </div>
+            <div className="storage-bar">
+              <i
+                className={
+                  usage.percent >= 80
+                    ? "critical"
+                    : usage.percent >= 60
+                      ? "warn"
+                      : ""
+                }
+                style={{ width: `${Math.max(2, usage.percent)}%` }}
+              />
+            </div>
+            <small>
+              {usage.percent >= 80
+                ? "المساحة شارفت على الامتلاء. صدّر نسخة واحذف بيانات قديمة."
+                : "تكفي عادةً لأكثر من سنة تشغيل. صدّر نسخة شهريًا للأمان."}
+            </small>
           </div>
           <div className="backup-grid">
             <div className="backup-card">

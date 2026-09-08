@@ -110,13 +110,42 @@ export function migrate(input: any): DbState {
   return state as DbState;
 }
 
+/** نتيجة القراءة مع بيان هل جرى تعافٍ من ملف تالف. */
+export type LoadResult = { state: DbState; recovered: boolean };
+
+function readKey(key: string): any {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    // نتحقق من الشكل لا من صحة JSON فقط: ملف بلا products ليس حالتنا.
+    if (!parsed || typeof parsed !== "object") return null;
+    if (!Array.isArray(parsed.products)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 /** يقرأ الحالة، وينقل البيانات من المفاتيح القديمة عند أول تشغيل بعد التحديث. */
 export function loadState(seedProducts: Product[] = []): DbState {
-  let raw: any = null;
-  try {
-    raw = JSON.parse(localStorage.getItem(DB_KEY) || "null");
-  } catch {
-    raw = null;
+  return loadStateSafe(seedProducts).state;
+}
+
+/**
+ * القراءة مع التعافي: إذا تلف الملف الأساسي نرجع لنسخة الأمان
+ * بدل بدء المحل من الصفر وفقدان سجل كامل.
+ */
+export function loadStateSafe(seedProducts: Product[] = []): LoadResult {
+  let raw: any = readKey(DB_KEY);
+  let recovered = false;
+
+  if (!raw) {
+    const snapshot = readKey(SNAPSHOT_KEY);
+    if (snapshot) {
+      raw = snapshot;
+      recovered = true;
+    }
   }
 
   if (!raw) {
@@ -141,11 +170,68 @@ export function loadState(seedProducts: Product[] = []): DbState {
   const state = migrate(raw);
   if (!state.products.length && seedProducts.length)
     state.products = seedProducts;
-  return state;
+  return { state, recovered };
 }
 
+/** فشل الكتابة على القرص؛ يُميَّز عن أخطاء العمل لأن علاجه مختلف. */
+export class StorageError extends Error {}
+
+/** مفتاح نسخة الأمان الأخيرة الناجحة، للتعافي من ملف تالف. */
+export const SNAPSHOT_KEY = "agri-db-snapshot";
+
 export function saveState(state: DbState) {
-  localStorage.setItem(DB_KEY, JSON.stringify(state));
+  let payload: string;
+  try {
+    payload = JSON.stringify(state);
+  } catch {
+    throw new StorageError("تعذر تجهيز البيانات للحفظ");
+  }
+
+  try {
+    localStorage.setItem(DB_KEY, payload);
+  } catch (error: any) {
+    // الامتلاء هو السبب الغالب؛ نميّزه برسالة تقول للمستخدم ماذا يفعل.
+    const quota =
+      error?.name === "QuotaExceededError" ||
+      error?.name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+      error?.code === 22;
+    throw new StorageError(
+      quota
+        ? "ذاكرة الجهاز ممتلئة. صدّر نسخة احتياطية ثم احذف بيانات قديمة قبل المتابعة."
+        : "تعذر الحفظ على هذا الجهاز. تأكد أن المتصفح يسمح بتخزين البيانات."
+    );
+  }
+}
+
+/**
+ * يحفظ نسخة أمان من آخر حالة سليمة.
+ * تُستخدم للتعافي إذا تلف الملف الأساسي، ونتجاهل فشلها لأنها رفاهية لا شرط.
+ */
+export function saveSnapshot(state: DbState) {
+  try {
+    localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(state));
+  } catch {
+    // نسخة الأمان أول ما يُضحى به عند ضيق المساحة.
+  }
+}
+
+/** حجم البيانات المحفوظة بالكيلوبايت، لعرض مؤشر الامتلاء. */
+export function storageUsage() {
+  try {
+    const main = localStorage.getItem(DB_KEY)?.length || 0;
+    const snap = localStorage.getItem(SNAPSHOT_KEY)?.length || 0;
+    // المتصفحات تحسب الحرف بـ2 بايت (UTF-16).
+    const usedKb = Math.round(((main + snap) * 2) / 1024);
+    // الحد الشائع 5 ميجابايت؛ نحذّر قبل بلوغه بوقت كافٍ.
+    const limitKb = 5120;
+    return {
+      usedKb,
+      limitKb,
+      percent: Math.min(100, Math.round((usedKb / limitKb) * 100)),
+    };
+  } catch {
+    return { usedKb: 0, limitKb: 5120, percent: 0 };
+  }
 }
 
 /**
@@ -158,7 +244,11 @@ export function transact(
 ): DbState {
   const draft: DbState = JSON.parse(JSON.stringify(state));
   mutator(draft);
+  // الحفظ قد يفشل (ذاكرة ممتلئة)؛ عندها يُرمى الخطأ ولا تُعتمد النسخة الجديدة،
+  // فتبقى الحالة السابقة سليمة في الذاكرة وعلى القرص معًا.
   saveState(draft);
+  // بعد نجاح الكتابة فقط نحدّث نسخة الأمان.
+  saveSnapshot(draft);
   return draft;
 }
 

@@ -1,7 +1,7 @@
 // Design: «سوق الحقل» — ربط المخزن الموحّد بواجهة React.
 // كل تغيير يمر عبر معاملة واحدة، فلا تُحفظ نصف عملية أبدًا.
 import { useCallback, useRef, useState } from "react";
-import { loadState, saveState, transact } from "./store";
+import { loadStateSafe, saveState, transact } from "./store";
 import { OperationError } from "./operations";
 import type { DbState, Product } from "./types";
 
@@ -25,11 +25,22 @@ function mergeCatalog(saved: Product[], catalog: Product[]): Product[] {
 }
 
 export function useDb(catalog: Product[]) {
+  // نحتفظ بعلم التعافي لعرض تنبيه للمستخدم مرة واحدة عند الإقلاع.
+  const recoveredRef = useRef(false);
+  const bootErrorRef = useRef("");
   const [state, setState] = useState<DbState>(() => {
-    const loaded = loadState();
+    const { state: loaded, recovered } = loadStateSafe();
+    recoveredRef.current = recovered;
     const merged = mergeCatalog(loaded.products, catalog);
     const next = { ...loaded, products: merged };
-    saveState(next);
+    try {
+      saveState(next);
+    } catch (error) {
+      // لا نُسقط التطبيق عند الإقلاع: نعرض البيانات ونبلّغ المستخدم،
+      // فقراءة السجل ممكنة حتى لو تعذّرت الكتابة.
+      bootErrorRef.current =
+        error instanceof Error ? error.message : "تعذر الحفظ على هذا الجهاز";
+    }
     return next;
   });
   // المرجع يحمل أحدث حالة دائمًا، حتى تُنفذ العمليات المتتابعة على بيانات صحيحة
@@ -58,5 +69,12 @@ export function useDb(catalog: Product[]) {
     setState(next);
   }, []);
 
-  return { state, run, replace, OperationError };
+  return {
+    state,
+    run,
+    replace,
+    OperationError,
+    recovered: recoveredRef.current,
+    bootError: bootErrorRef.current,
+  };
 }
