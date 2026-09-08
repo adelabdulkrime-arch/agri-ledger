@@ -114,3 +114,6 @@ client/public/__manus__/version.json
 
 # حزمة نسخة المحل تُولَّد بأمر package:shop
 نسخة-المحل/
+
+# ملف النشر التلقائي؛ يُضاف يدويًا لأن صلاحية workflow غير ممنوحة
+.github-workflow-backup/
