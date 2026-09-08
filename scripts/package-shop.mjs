@@ -21,6 +21,9 @@ cpSync(path.join(dist, "public"), path.join(out, "public"), {
   recursive: true,
 });
 
+// بقايا قالب Manus: أداة تتبّع لا يستخدمها التطبيق، ولا مكان لها في نسخة المحل.
+rmSync(path.join(out, "public", "__manus__"), { recursive: true, force: true });
+
 const launcher = `@echo off
 chcp 65001 >nul
 title دفتر الزراعة — نظام المبيعات والمخزون
