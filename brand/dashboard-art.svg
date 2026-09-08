@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500" role="img" aria-label="حقل زراعي">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1d5053"/>
+      <stop offset="100%" stop-color="#2c6f5c"/>
+    </linearGradient>
+    <linearGradient id="field" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3f9a5c"/>
+      <stop offset="100%" stop-color="#22603a"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="500" fill="url(#sky)"/>
+  <circle cx="640" cy="112" r="54" fill="#f2b441" opacity=".92"/>
+  <!-- تلال بعيدة -->
+  <path d="M0 250c120-46 210-46 320 4s250 40 480-22v268H0z" fill="#28685a" opacity=".75"/>
+  <!-- خطوط الحقل -->
+  <path d="M0 300c160-40 300-40 420 0s250 34 380-8v208H0z" fill="url(#field)"/>
+  <g stroke="#1a4c33" stroke-width="3" opacity=".45">
+    <path d="M0 360c200-34 420-34 800 0"/>
+    <path d="M0 402c200-34 420-34 800 0"/>
+    <path d="M0 444c200-34 420-34 800 0"/>
+  </g>
+  <!-- شتلات -->
+  <g fill="#7fc98c">
+    <path d="M150 344c0-24 12-40 34-46-2 24-14 40-34 46zM150 344c0-24-12-40-34-46 2 24 14 40 34 46z"/>
+    <path d="M420 330c0-24 12-40 34-46-2 24-14 40-34 46zM420 330c0-24-12-40-34-46 2 24 14 40 34 46z"/>
+    <path d="M660 348c0-24 12-40 34-46-2 24-14 40-34 46zM660 348c0-24-12-40-34-46 2 24 14 40 34 46z"/>
+  </g>
+</svg>
