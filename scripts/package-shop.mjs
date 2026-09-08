@@ -4,7 +4,7 @@ import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "fs";
 import path from "path";
 
 const root = process.cwd();
-const out = path.join(root, "نسخة-المحل");
+const out = path.join(root, "shop-package");
 const dist = path.join(root, "dist");
 
 if (!existsSync(path.join(dist, "public", "index.html"))) {
@@ -16,7 +16,7 @@ if (!existsSync(path.join(dist, "public", "index.html"))) {
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
 
-cpSync(path.join(dist, "server-standalone.cjs"), path.join(out, "النظام.cjs"));
+cpSync(path.join(dist, "server-standalone.cjs"), path.join(out, "agri-ledger.cjs"));
 cpSync(path.join(dist, "public"), path.join(out, "public"), {
   recursive: true,
 });
@@ -50,20 +50,20 @@ if not exist "public\\index.html" (
 start "" cmd /c "timeout /t 3 >nul && start http://localhost:3000"
 
 set NODE_ENV=production
-node "النظام.cjs"
+node "agri-ledger.cjs"
 
 echo.
 echo   تم إيقاف النظام.
 pause
 `;
-writeFileSync(path.join(out, "تشغيل النظام.bat"), launcher, "utf8");
+writeFileSync(path.join(out, "START-تشغيل-النظام.bat"), launcher, "utf8");
 
 const readme = `دفتر الزراعة — نظام المبيعات والمخزون
 =====================================
 
 التشغيل
 -------
-انقر نقرًا مزدوجًا على ملف: تشغيل النظام.bat
+انقر نقرًا مزدوجًا على ملف: START-تشغيل-النظام.bat
 سيفتح المتصفح تلقائيًا على النظام.
 
 لإيقاف النظام: أغلق النافذة السوداء.
@@ -107,7 +107,7 @@ http://192.168.1.107:3000/
 -----
 راجع ملف todo.md في مجلد المشروع لتفاصيل المزايا والمراحل القادمة.
 `;
-writeFileSync(path.join(out, "اقرأني.txt"), readme, "utf8");
+writeFileSync(path.join(out, "README-اقرأني.txt"), readme, "utf8");
 
 console.log(`تم تجهيز نسخة المحل في: ${out}`);
 console.log("انسخ هذا المجلد كاملًا إلى جهاز المحل.");

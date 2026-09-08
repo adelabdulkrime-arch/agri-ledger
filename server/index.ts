@@ -11,7 +11,9 @@ import os from "os";
 function resolveDirname(): string {
   // في CJS يكون __dirname معرفًا، وفي ESM نشتقه من import.meta.url.
   if (typeof __dirname !== "undefined") return __dirname;
-  return path.dirname(fileURLToPath(import.meta.url));
+  // eval يمنع المُحزّم من تحليل import.meta في بناء cjs.
+  const url = (0, eval)("import.meta.url") as string;
+  return path.dirname(fileURLToPath(url));
 }
 
 /** عناوين الشبكة المحلية، ليفتح جهاز آخر النظام على نفس الواي فاي. */
