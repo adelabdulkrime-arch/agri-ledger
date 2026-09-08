@@ -1,7 +1,15 @@
 // Design: «سوق الحقل» — تخزين مؤقت يسمح بالعمل دون إنترنت،
 // مع ضمان وصول التحديثات الجديدة بدل تثبيت المستخدم على نسخة قديمة.
-const CACHE_NAME = "agri-ledger-offline-v2";
-const APP_SHELL = ["/", "/manifest.json", "/brand/agri-mark.svg"];
+const CACHE_NAME = "agri-ledger-offline-v3";
+// المسار مشتق من موقع الملف نفسه، ليعمل في الجذر أو داخل مجلد فرعي.
+const BASE = new URL("./", self.location).pathname;
+const APP_SHELL = [
+  BASE,
+  BASE + "manifest.json",
+  BASE + "brand/agri-mark.svg",
+  BASE + "brand/icon-192.png",
+  BASE + "brand/icon-512.png",
+];
 
 self.addEventListener("install", event => {
   event.waitUntil(
@@ -39,11 +47,11 @@ self.addEventListener("fetch", event => {
       fetch(request)
         .then(response => {
           const copy = response.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put("/", copy));
+          caches.open(CACHE_NAME).then(cache => cache.put(BASE, copy));
           return response;
         })
         .catch(() =>
-          caches.match("/").then(cached => cached || caches.match(request))
+          caches.match(BASE).then(cached => cached || caches.match(request))
         )
     );
     return;

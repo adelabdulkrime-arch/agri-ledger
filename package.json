@@ -11,7 +11,9 @@
     "check": "tsc --noEmit",
     "format": "prettier --write .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "build:standalone": "vite build && esbuild server/index.ts --platform=node --bundle --format=cjs --outfile=dist/server-standalone.cjs",
+    "package:shop": "pnpm run build:standalone && node scripts/package-shop.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

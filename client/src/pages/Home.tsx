@@ -109,6 +109,7 @@ import ReturnDialog from "../components/ReturnDialog";
 import ExpensesBoard from "../components/ExpensesBoard";
 import ProductUnitsDialog from "../components/ProductUnitsDialog";
 import { useUsbScanner } from "../hooks/useUsbScanner";
+import { useInstallPrompt } from "../hooks/useInstallPrompt";
 import { usePersistFn } from "../hooks/usePersistFn";
 
 const logoUrl = "/brand/agri-mark.svg";
@@ -275,6 +276,7 @@ export default function Home() {
   const [showPurchase, setShowPurchase] = useState(false);
   const [showSupplier, setShowSupplier] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
+  const { canInstall, install } = useInstallPrompt();
   const [showExpense, setShowExpense] = useState(false);
   const [unitsProduct, setUnitsProduct] = useState<Product | null>(null);
   const [payingPurchase, setPayingPurchase] = useState<Purchase | null>(null);
@@ -879,6 +881,19 @@ export default function Home() {
             <div className="save-status">
               <ShieldCheck size={16} /> {notice}
             </div>
+            {canInstall && (
+              <button
+                className="install-btn"
+                onClick={async () => {
+                  const done = await install();
+                  if (done)
+                    toast.success("تم تثبيت النظام على الجهاز");
+                }}
+                title="تثبيت النظام كتطبيق على هذا الجهاز"
+              >
+                <Download size={15} /> تثبيت التطبيق
+              </button>
+            )}
             <button
               className="icon-btn"
               onClick={() => toast.info("لا توجد تنبيهات جديدة")}

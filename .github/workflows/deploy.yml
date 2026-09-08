@@ -1,0 +1,60 @@
+name: نشر دفتر الزراعة
+
+# ينشر تلقائيًا عند كل تحديث على الفرع الرئيسي.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# نمنع تشغيل نشرتين معًا حتى لا تتعارضا.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --no-frozen-lockfile
+
+      - name: فحص الأنواع
+        run: pnpm run check
+
+      - name: الاختبارات
+        run: pnpm test
+
+      - name: البناء
+        run: pnpm run build
+        env:
+          # المشروع يُنشر داخل مجلد باسم المستودع، لا في جذر النطاق.
+          BASE_PATH: /${{ github.event.repository.name }}/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
