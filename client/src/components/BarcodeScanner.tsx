@@ -78,8 +78,22 @@ export default function BarcodeScanner({
           delayBetweenScanAttempts: 120,
         });
 
-        const controls = await reader.decodeFromVideoDevice(
-          deviceId,
+        // نطلب أعلى دقة متاحة: الافتراضي 640×480 لا يكفي لقراءة
+        // باركود كثيف، ويفشل المسح رغم وضوح الصورة للعين.
+        const constraints: MediaStreamConstraints = {
+          video: {
+            ...(deviceId
+              ? { deviceId: { exact: deviceId } }
+              : { facingMode: { ideal: "environment" } }),
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            // التركيز المستمر يساعد على الأسطح المنحنية والقريبة.
+            ...({ focusMode: "continuous" } as any),
+          },
+        };
+
+        const controls = await reader.decodeFromConstraints(
+          constraints,
           videoRef.current!,
           result => {
             if (!result) return;
