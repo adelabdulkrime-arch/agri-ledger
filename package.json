@@ -13,7 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build:standalone": "vite build && esbuild server/index.ts --platform=node --bundle --format=cjs --outfile=dist/server-standalone.cjs",
-    "package:shop": "pnpm run build:standalone && node scripts/package-shop.mjs"
+    "package:shop": "pnpm run build:standalone && node scripts/package-shop.mjs",
+    "desktop:build": "node scripts/build-desktop.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
@@ -82,6 +83,8 @@
     "@vitejs/plugin-react": "^5.0.4",
     "add": "^2.0.6",
     "autoprefixer": "^10.4.20",
+    "electron": "33",
+    "electron-builder": "25",
     "esbuild": "^0.25.0",
     "pnpm": "^10.15.1",
     "postcss": "^8.4.47",

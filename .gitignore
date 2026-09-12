@@ -117,3 +117,7 @@ shop-package/
 
 # ملف النشر التلقائي؛ يُضاف يدويًا لأن صلاحية workflow غير ممنوحة
 .github-workflow-backup/
+
+# مجلدات بناء تطبيق سطح المكتب (تُولَّد بأمر desktop:build)
+desktop-build/
+installer/

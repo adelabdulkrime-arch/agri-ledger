@@ -1,0 +1,47 @@
+{
+  "appId": "com.agriledger.app",
+  "productName": "دفتر الزراعة",
+  "copyright": "دفتر الزراعة",
+  "directories": {
+    "output": "../installer"
+  },
+  "files": [
+    "electron/**/*",
+    "public/**/*",
+    "package.json"
+  ],
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": [
+          "x64"
+        ]
+      }
+    ],
+    "icon": "electron/icon.png",
+    "artifactName": "AgriLedger-Setup-${version}.${ext}",
+    "signAndEditExecutable": false,
+    "signtoolOptions": {
+      "sign": null
+    }
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "دفتر الزراعة",
+    "installerLanguages": [
+      "ar-SA",
+      "en-US"
+    ],
+    "language": "1025",
+    "deleteAppDataOnUninstall": false
+  },
+  "compression": "maximum",
+  "asar": true,
+  "electronVersion": "33.4.11",
+  "executableName": "agri-ledger",
+  "forceCodeSigning": false
+}
