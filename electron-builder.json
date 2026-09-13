@@ -1,7 +1,7 @@
 {
   "appId": "com.agriledger.app",
-  "productName": "دفتر الزراعة",
-  "copyright": "دفتر الزراعة",
+  "productName": "Agri Ledger",
+  "copyright": "Agri Ledger",
   "directories": {
     "output": "../installer"
   },
@@ -31,7 +31,7 @@
     "allowToChangeInstallationDirectory": true,
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,
-    "shortcutName": "دفتر الزراعة",
+    "shortcutName": "Agri Ledger",
     "installerLanguages": [
       "ar-SA",
       "en-US"

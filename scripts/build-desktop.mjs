@@ -55,7 +55,7 @@ writeFileSync(
   JSON.stringify(
     {
       name: "agri-ledger",
-      productName: "دفتر الزراعة",
+      productName: "Agri Ledger",
       version: "1.0.0",
       description: "نظام مبيعات ومخزون ومحاسبة لمحل الأسمدة والمعدات الزراعية",
       main: "electron/main.cjs",
