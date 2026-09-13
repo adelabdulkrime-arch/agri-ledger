@@ -128,7 +128,7 @@ const seedProducts: Product[] = [
     name: "سماد NPK متوازن",
     category: "أسمدة",
     unit: "كيس",
-    stock: 24,
+    stock: 0,
     price: 185,
     color: "leaf",
     barcode: "628100000001",
@@ -140,7 +140,7 @@ const seedProducts: Product[] = [
     name: "مبيد حشري عضوي",
     category: "مبيدات",
     unit: "عبوة",
-    stock: 8,
+    stock: 0,
     price: 72,
     color: "gold",
     barcode: "628100000002",
@@ -152,7 +152,7 @@ const seedProducts: Product[] = [
     name: "خرطوم ري ½ بوصة",
     category: "معدات ري",
     unit: "متر",
-    stock: 132,
+    stock: 0,
     price: 12.5,
     color: "blue",
     barcode: "628100000003",
@@ -164,7 +164,7 @@ const seedProducts: Product[] = [
     name: "بذور طماطم هجين",
     category: "بذور",
     unit: "ظرف",
-    stock: 4,
+    stock: 0,
     price: 28,
     color: "orange",
     barcode: "628100000004",
@@ -176,7 +176,7 @@ const seedProducts: Product[] = [
     name: "مرش ظهر 16 لتر",
     category: "معدات",
     unit: "قطعة",
-    stock: 17,
+    stock: 0,
     price: 650,
     color: "navy",
     barcode: "628100000005",
@@ -984,25 +984,11 @@ export default function Home() {
                 tone="yellow"
               />
               <Metric
-                title="صافي ربح اليوم"
-                value={money(todayProfit.netProfit)}
-                note={`هامش ${todayProfit.netMargin}% بعد التكلفة والمصروفات`}
-                icon={<CircleDollarSign />}
-                tone="green"
-              />
-              <Metric
-                title="قيمة المخزون بالتكلفة"
-                value={money(stockValue)}
+                title="الأصناف في المخزون"
+                value={String(products.length)}
                 note={`ضمن ${categories.length} قسمًا`}
                 icon={<Boxes />}
                 tone="blue"
-              />
-              <Metric
-                title="إجمالي المشتريات"
-                value={money(purchasesSum)}
-                note={`${purchases.filter(p => p.status === "confirmed").length} فاتورة شراء`}
-                icon={<ShoppingBag />}
-                tone="yellow"
               />
               <Metric
                 title="مستحق للموردين"

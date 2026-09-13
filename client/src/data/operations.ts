@@ -10,6 +10,9 @@ import type {
   StockMove,
   StockMoveType,
   Supplier,
+  Customer,
+  CustomerLedgerEntry,
+  PartyTerms,
   ReturnKind,
   ReturnLine,
   StockReturn,
@@ -507,6 +510,9 @@ export function payPurchase(
 
 export type SaleInput = {
   customer?: string;
+  /** العميل المسجل؛ مطلوب للبيع الآجل ليُقيَّد على حسابه. */
+  customerId?: number;
+  terms?: PartyTerms;
   at?: string;
   lines: {
     productId: number;
@@ -527,6 +533,18 @@ export function postSale(state: DbState, input: SaleInput): Sale {
   const at = input.at || new Date().toISOString();
   const no = nextNumber(state.sales, 1048);
   const lines: SaleLine[] = [];
+
+  // العميل اختياري: البيع النقدي العابر لا يحتاج سجلًا، لكن الآجل يحتاجه
+  // ليُقيَّد على حسابه ويظهر في كشف الحساب.
+  const customerRecord = input.customerId
+    ? state.customers.find(c => c.id === input.customerId)
+    : undefined;
+  if (input.customerId && !customerRecord) fail("العميل غير موجود");
+  const terms: PartyTerms = input.terms || customerRecord?.terms || "cash";
+  const customerName =
+    customerRecord?.name || (input.customer || "").trim() || "عميل نقدي";
+  if (terms === "credit" && !customerRecord)
+    fail("البيع الآجل يحتاج عميلًا مسجلًا");
 
   input.lines.forEach(raw => {
     const product = state.products.find(p => p.id === raw.productId);
@@ -576,12 +594,37 @@ export function postSale(state: DbState, input: SaleInput): Sale {
   const sale: Sale = {
     no,
     at,
-    customer: (input.customer || "").trim() || "عميل نقدي",
+    customer: customerName,
+    customerId: customerRecord?.id,
+    terms,
     lines,
     total: round2(lines.reduce((sum, l) => sum + l.price * l.qty, 0)),
     cogs: round2(lines.reduce((sum, l) => sum + l.unitCost * l.qty, 0)),
   };
   state.sales.unshift(sale);
+
+  // البيع الآجل دين على العميل، فيُقيَّد مدينًا في دفتر أستاذه.
+  if (terms === "credit" && customerRecord) {
+    const owed = customerBalance(state, customerRecord.id);
+    if (
+      customerRecord.creditLimit > 0 &&
+      owed + sale.total > customerRecord.creditLimit
+    )
+      fail(
+        `يتجاوز حد ائتمان ${customerRecord.name} البالغ ${customerRecord.creditLimit}`
+      );
+    state.customerLedger.push({
+      id: nextId(state.customerLedger),
+      customerId: customerRecord.id,
+      at,
+      type: "فاتورة بيع",
+      refNo: no,
+      debit: sale.total,
+      credit: 0,
+      note: "بيع آجل",
+    });
+  }
+
   return sale;
 }
 
@@ -717,6 +760,21 @@ export function postSaleReturn(
     reason: (input.reason || "").trim(),
   };
   state.returns.unshift(entry);
+
+  // إن كانت الفاتورة آجلة على عميل مسجل، فالمرتجع يقلل دينه.
+  if (sale.terms === "credit" && sale.customerId) {
+    state.customerLedger.push({
+      id: nextId(state.customerLedger),
+      customerId: sale.customerId,
+      at,
+      type: "مرتجع بيع",
+      refNo: sale.no,
+      debit: 0,
+      credit: entry.total,
+      note: `مرتجع من فاتورة #${sale.no}`,
+    });
+  }
+
   return entry;
 }
 
@@ -1182,6 +1240,307 @@ export function findByBarcode(
     if (unit) return { product, unitName: unit.name };
   }
   return null;
+}
+
+
+// ---------------------------------------------------------------- العملاء
+
+export function createCustomer(
+  state: DbState,
+  input: Partial<Customer> & { name: string }
+): Customer {
+  const name = (input.name || "").trim();
+  if (!name) fail("اسم العميل مطلوب");
+  const duplicate = state.customers.some(
+    c => c.name.trim().toLowerCase() === name.toLowerCase()
+  );
+  if (duplicate) fail("يوجد عميل بنفس الاسم");
+
+  const creditLimit = Number(input.creditLimit || 0);
+  if (!Number.isFinite(creditLimit) || creditLimit < 0)
+    fail("حد الائتمان لا يصح أن يكون سالبًا");
+
+  const customer: Customer = {
+    id: nextId(state.customers),
+    name,
+    phone: (input.phone || "").trim(),
+    address: (input.address || "").trim(),
+    taxNumber: (input.taxNumber || "").trim(),
+    notes: (input.notes || "").trim(),
+    terms: input.terms || "cash",
+    creditLimit: round2(creditLimit),
+    status: input.status || "active",
+    createdAt: new Date().toISOString(),
+  };
+  state.customers.push(customer);
+  return customer;
+}
+
+export function updateCustomer(
+  state: DbState,
+  id: number,
+  patch: Partial<Customer>
+): Customer {
+  const customer = state.customers.find(c => c.id === id);
+  if (!customer) fail("العميل غير موجود");
+  if (patch.name !== undefined) {
+    const name = patch.name.trim();
+    if (!name) fail("اسم العميل مطلوب");
+    const clash = state.customers.some(
+      c => c.id !== id && c.name.trim().toLowerCase() === name.toLowerCase()
+    );
+    if (clash) fail("يوجد عميل بنفس الاسم");
+    customer.name = name;
+  }
+  if (patch.creditLimit !== undefined) {
+    const limit = Number(patch.creditLimit);
+    if (!Number.isFinite(limit) || limit < 0)
+      fail("حد الائتمان لا يصح أن يكون سالبًا");
+    customer.creditLimit = round2(limit);
+  }
+  for (const key of [
+    "phone",
+    "address",
+    "taxNumber",
+    "notes",
+    "terms",
+    "status",
+  ] as const) {
+    if (patch[key] !== undefined) (customer as any)[key] = patch[key];
+  }
+  return customer;
+}
+
+/** رصيد العميل = ما علينا له سالبًا وما له علينا موجبًا، من دفتر الأستاذ. */
+export function customerBalance(state: DbState, customerId: number) {
+  return round2(
+    state.customerLedger
+      .filter(e => e.customerId === customerId)
+      .reduce((sum, e) => sum + e.debit - e.credit, 0)
+  );
+}
+
+export function customerTotals(state: DbState, customerId: number) {
+  const customer = state.customers.find(c => c.id === customerId);
+  const sales = state.sales.filter(s => s.customerId === customerId);
+  const total = round2(sales.reduce((sum, s) => sum + s.total, 0));
+  const balance = customerBalance(state, customerId);
+  return {
+    count: sales.length,
+    total,
+    balance,
+    collected: round2(total - balance),
+    creditLimit: customer?.creditLimit || 0,
+  };
+}
+
+/** كشف حساب العميل مرتبًا زمنيًا برصيد تراكمي. */
+export function customerStatement(
+  state: DbState,
+  customerId: number,
+  from?: Date,
+  to?: Date
+) {
+  const entries = state.customerLedger
+    .filter(e => e.customerId === customerId)
+    .filter(e => {
+      const at = new Date(e.at);
+      if (from && at < from) return false;
+      if (to && at > to) return false;
+      return true;
+    })
+    .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+
+  let running = 0;
+  return entries.map(e => {
+    running = round2(running + e.debit - e.credit);
+    return { ...e, balance: running };
+  });
+}
+
+/** تحصيل دفعة من عميل آجل؛ تُقيَّد دائنًا فتقلل ما عليه. */
+export function collectFromCustomer(
+  state: DbState,
+  customerId: number,
+  amount: number,
+  note = "تحصيل نقدي"
+): CustomerLedgerEntry {
+  const customer = state.customers.find(c => c.id === customerId);
+  if (!customer) fail("العميل غير موجود");
+  const value = round2(Number(amount));
+  if (!Number.isFinite(value) || value <= 0) fail("قيمة التحصيل غير صحيحة");
+
+  const owed = customerBalance(state, customerId);
+  if (value > owed) fail(`المبلغ المستحق على العميل هو ${owed} فقط`);
+
+  const entry: CustomerLedgerEntry = {
+    id: nextId(state.customerLedger),
+    customerId,
+    at: new Date().toISOString(),
+    type: "تحصيل",
+    refNo: 0,
+    debit: 0,
+    credit: value,
+    note,
+  };
+  state.customerLedger.push(entry);
+  return entry;
+}
+
+/** إجمالي ما على العملاء (الذمم المدينة). */
+export function receivablesTotal(state: DbState) {
+  return round2(
+    state.customers.reduce((sum, c) => sum + customerBalance(state, c.id), 0)
+  );
+}
+
+// ------------------------------------------------ الجرد والتسويات المخزنية
+
+export type StockTakeLine = {
+  productId: number;
+  /** الكمية الفعلية الموجودة في المخزن عند الجرد. */
+  countedQty: number;
+  /** تكلفة الوحدة الحقيقية؛ تُستخدم لتصحيح متوسط التكلفة. */
+  unitCost?: number;
+};
+
+/**
+ * جرد فعلي: يضبط رصيد كل صنف على الكمية المعدودة ويسجل الفرق كحركة
+ * ADJUSTMENT، فيبقى الأثر مرئيًا في تقرير حركة الأصناف.
+ *
+ * يعالج أيضًا مشكلة أرصدة البداية بتكلفة صفر: تمرير unitCost يصحّح
+ * متوسط التكلفة فتصبح الأرباح حقيقية لا مبالغًا فيها.
+ */
+export function postStockTake(
+  state: DbState,
+  lines: StockTakeLine[],
+  note = "جرد فعلي"
+): StockMove[] {
+  if (!lines?.length) fail("أضف صنفًا واحدًا على الأقل للجرد");
+
+  const at = new Date().toISOString();
+  const refNo = nextNumber(
+    state.stockMoves.filter(m => m.refType === "stocktake").map(m => ({ no: m.refNo })),
+    9000
+  );
+
+  // نتحقق من كل السطور قبل أي كتابة، فلا يُطبَّق جرد نصفه صالح.
+  const prepared = lines.map(raw => {
+    const product = state.products.find(p => p.id === raw.productId);
+    if (!product) fail("أحد الأصناف غير موجود");
+    const counted = Number(raw.countedQty);
+    if (!Number.isFinite(counted) || counted < 0)
+      fail(`الكمية المعدودة لا تصح أن تكون سالبة: ${product.name}`);
+    const cost = raw.unitCost === undefined ? undefined : Number(raw.unitCost);
+    if (cost !== undefined && (!Number.isFinite(cost) || cost < 0))
+      fail(`التكلفة لا تصح أن تكون سالبة: ${product.name}`);
+    return { product, counted, cost };
+  });
+
+  const moves: StockMove[] = [];
+  prepared.forEach(({ product, counted, cost }) => {
+    // التكلفة تُصحَّح أولًا لأن الرصيد الجديد يُقيَّم بها.
+    if (cost !== undefined) {
+      product.avgCost = round2(cost);
+      if (!product.lastCost) product.lastCost = round2(cost);
+    }
+
+    const diff = round2(counted - product.stock);
+    if (diff === 0) return;
+
+    moves.push(
+      recordMove(state, {
+        productId: product.id,
+        productName: product.name,
+        type: "ADJUSTMENT",
+        qty: diff,
+        unitCost: product.avgCost,
+        refType: "stocktake",
+        refNo,
+        at,
+        note: `${note} (${diff > 0 ? "زيادة" : "عجز"})`,
+      })
+    );
+  });
+
+  return moves;
+}
+
+/** تصفير أرصدة كل الأصناف وتكاليفها، للبدء من سجل نظيف قبل التشغيل. */
+export function resetOpeningBalances(state: DbState): number {
+  const lines = state.products
+    .filter(p => p.stock !== 0 || p.avgCost !== 0)
+    .map(p => ({ productId: p.id, countedQty: 0, unitCost: 0 }));
+  if (!lines.length) return 0;
+  postStockTake(state, lines, "تصفير أرصدة البداية");
+  // التصفير يشمل التكلفة أيضًا حتى لا تبقى قيمة موروثة من الكتالوج.
+  state.products.forEach(p => {
+    p.avgCost = 0;
+    p.lastCost = 0;
+  });
+  return lines.length;
+}
+
+// ------------------------------------------------------ ميزان المراجعة
+
+export type TrialBalanceRow = {
+  account: string;
+  debit: number;
+  credit: number;
+};
+
+/**
+ * ميزان مراجعة مبسط بالقيد المزدوج.
+ *
+ * الحسابات المدينة: المخزون بالتكلفة، الذمم المدينة (على العملاء)،
+ * تكلفة البضاعة المباعة، والمصروفات التشغيلية.
+ * الحسابات الدائنة: المبيعات (بعد المرتجعات) والذمم الدائنة (للموردين).
+ *
+ * الفرق بين الجانبين يمثل حركة النقد والأرباح المحتجزة، ونعرضه صراحةً
+ * بدل إخفائه حتى يبقى الميزان مفهومًا ومتوازنًا.
+ */
+export function trialBalance(state: DbState): {
+  rows: TrialBalanceRow[];
+  totalDebit: number;
+  totalCredit: number;
+  balanced: boolean;
+} {
+  const inventory = inventoryValue(state);
+  const receivables = receivablesTotal(state);
+  const payables = payablesTotal(state);
+  const profit = netProfitSummary(state, state.sales);
+  const opex = expensesTotal(state.expenses);
+
+  const rows: TrialBalanceRow[] = [
+    { account: "المخزون آخر المدة", debit: inventory, credit: 0 },
+    { account: "ذمم مدينة — العملاء", debit: receivables, credit: 0 },
+    { account: "تكلفة البضاعة المباعة", debit: profit.cogs, credit: 0 },
+    { account: "المصروفات التشغيلية", debit: opex, credit: 0 },
+    { account: "المبيعات (بعد المرتجعات)", debit: 0, credit: profit.revenue },
+    { account: "ذمم دائنة — الموردون", debit: 0, credit: payables },
+  ];
+
+  const totalDebit = round2(rows.reduce((sum, r) => sum + r.debit, 0));
+  const totalCredit = round2(rows.reduce((sum, r) => sum + r.credit, 0));
+
+  // الفرق = صافي النقد ورأس المال؛ نضيفه كسطر موازن ليقفل الميزان.
+  const diff = round2(totalDebit - totalCredit);
+  if (diff !== 0)
+    rows.push({
+      account: diff > 0 ? "رأس المال وحركة النقد" : "أرباح محتجزة",
+      debit: diff < 0 ? Math.abs(diff) : 0,
+      credit: diff > 0 ? diff : 0,
+    });
+
+  const finalDebit = round2(rows.reduce((sum, r) => sum + r.debit, 0));
+  const finalCredit = round2(rows.reduce((sum, r) => sum + r.credit, 0));
+
+  return {
+    rows,
+    totalDebit: finalDebit,
+    totalCredit: finalCredit,
+    balanced: Math.abs(finalDebit - finalCredit) < 0.01,
+  };
 }
 
 export const MOVE_LABELS: Record<StockMoveType, string> = {

@@ -60,7 +60,12 @@ export type SaleLine = {
 export type Sale = {
   no: number;
   at: string;
+  /** اسم العميل كما ظهر وقت البيع، يبقى حتى لو عُدّل سجل العميل. */
   customer: string;
+  /** مرجع العميل المسجل؛ غيابه يعني بيعًا نقديًا عابرًا. */
+  customerId?: number;
+  /** نقدي يُحصَّل فورًا، وآجل يُقيَّد على حساب العميل. */
+  terms?: PartyTerms;
   lines: SaleLine[];
   total: number;
   /** تكلفة البضاعة المباعة لهذه الفاتورة. */
@@ -214,6 +219,38 @@ export type Expense = {
   notes: string;
 };
 
+
+/** تصنيف التعامل: نقدي يسدد فورًا، وآجل يُقيَّد على حسابه. */
+export type PartyTerms = "cash" | "credit";
+
+export type Customer = {
+  id: number;
+  name: string;
+  phone: string;
+  address: string;
+  taxNumber: string;
+  notes: string;
+  terms: PartyTerms;
+  /** حد الائتمان؛ صفر يعني بلا حد. */
+  creditLimit: number;
+  status: "active" | "inactive";
+  createdAt: string;
+};
+
+/** قيد في دفتر أستاذ العميل: مدين يزيد ما له علينا، دائن يقلله. */
+export type CustomerLedgerEntry = {
+  id: number;
+  customerId: number;
+  at: string;
+  type: string;
+  refNo: number;
+  /** مدين: قيمة المبيعات الآجلة (ما على العميل). */
+  debit: number;
+  /** دائن: التحصيل والمرتجعات. */
+  credit: number;
+  note: string;
+};
+
 /** الحالة الكاملة المحفوظة؛ كل ما يخص المحل في مكان واحد. */
 export type DbState = {
   version: number;
@@ -225,4 +262,6 @@ export type DbState = {
   supplierLedger: SupplierLedgerEntry[];
   returns: StockReturn[];
   expenses: Expense[];
+  customers: Customer[];
+  customerLedger: CustomerLedgerEntry[];
 };

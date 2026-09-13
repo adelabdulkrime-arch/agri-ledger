@@ -3,7 +3,7 @@
 import type { DbState, Product } from "./types";
 
 export const DB_KEY = "agri-db";
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 9;
 
 /** المفاتيح القديمة قبل توحيد التخزين؛ نقرأ منها مرة واحدة ثم نتركها كنسخة أمان. */
 const LEGACY_PRODUCTS = "agri-products";
@@ -20,6 +20,8 @@ export function emptyState(): DbState {
     supplierLedger: [],
     returns: [],
     expenses: [],
+    customers: [],
+    customerLedger: [],
   };
 }
 
@@ -104,6 +106,30 @@ export function migrate(input: any): DbState {
       altBarcodes: Array.isArray(p.altBarcodes) ? p.altBarcodes : [],
     }));
     version = 7;
+  }
+
+  // 7 -> 8: تصفير الأرصدة الابتدائية الوهمية.
+  // أصناف الكتالوج كانت تُشحن برصيد وتكلفة صفر، فيخلط المتوسط المرجح
+  // كميات مجانية مع مشتريات حقيقية ويظهر الربح أعلى من الواقع.
+  // نصفّر فقط الأصناف التي لم تدخل في أي حركة مخزون، حتى لا نمسّ
+  // بيانات مستخدم سجّل مشترياته فعلًا.
+  if (version < 8) {
+    const touched = new Set(
+      (state.stockMoves || []).map((m: any) => m.productId)
+    );
+    state.products = (state.products || []).map((p: any) =>
+      touched.has(p.id)
+        ? p
+        : { ...p, stock: 0, avgCost: 0, lastCost: 0 }
+    );
+    version = 8;
+  }
+
+  // 8 -> 9: سجل العملاء ودفتر أستاذهم (نقدي/آجل).
+  if (version < 9) {
+    state.customers = state.customers || [];
+    state.customerLedger = state.customerLedger || [];
+    version = 9;
   }
 
   state.version = version;

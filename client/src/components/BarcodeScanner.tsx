@@ -58,6 +58,7 @@ export default function BarcodeScanner({
   const [error, setError] = useState("");
   const [ready, setReady] = useState(false);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [fixedFocus, setFixedFocus] = useState(false);
   const [deviceId, setDeviceId] = useState<string>();
 
   useEffect(() => {
@@ -74,8 +75,13 @@ export default function BarcodeScanner({
       try {
         const hints = new Map();
         hints.set(DecodeHintType.POSSIBLE_FORMATS, formats);
+        // TRY_HARDER يجعل ZXing يبذل محاولات إضافية في كل إطار بدل تمريرة
+        // سريعة واحدة. بدونه يفشل الباركود على الأسطح المنحنية واللامعة
+        // رغم وضوح الصورة تمامًا للعين.
+        hints.set(DecodeHintType.TRY_HARDER, true);
         const reader = new BrowserMultiFormatReader(hints, {
-          delayBetweenScanAttempts: 120,
+          // محاولة أكثر تكرارًا؛ 120ms كانت تضيّع إطارات مفيدة.
+          delayBetweenScanAttempts: 50,
         });
 
         // نطلب أعلى دقة متاحة: الافتراضي 640×480 لا يكفي لقراءة
@@ -117,6 +123,16 @@ export default function BarcodeScanner({
         stopScan = () => controls.stop();
         setReady(true);
         setError("");
+        // نقرأ قدرات الكاميرا: غياب focusMode يعني عدسة ثابتة التركيز،
+        // وهي السبب الحقيقي لفشل قراءة الباركود القريب على اللابتوب.
+        try {
+          const track = (videoRef.current?.srcObject as MediaStream)
+            ?.getVideoTracks?.()[0];
+          const caps = track?.getCapabilities?.() as any;
+          if (caps && !caps.focusMode) setFixedFocus(true);
+        } catch {
+          // قراءة القدرات رفاهية تشخيصية؛ فشلها لا يمنع المسح.
+        }
 
         // قائمة الكاميرات تحتاج إذنًا ممنوحًا، لذلك نقرأها بعد التشغيل.
         const list = await navigator.mediaDevices.enumerateDevices();
