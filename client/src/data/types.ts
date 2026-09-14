@@ -251,6 +251,64 @@ export type CustomerLedgerEntry = {
   note: string;
 };
 
+
+/** تصنيف الحساب يحدد طبيعة رصيده ومكانه في القوائم المالية. */
+export type AccountType =
+  | "asset"
+  | "liability"
+  | "equity"
+  | "revenue"
+  | "expense";
+
+/** طبيعة الرصيد: مدين للأصول والمصروفات، دائن لغيرها. */
+export type NormalSide = "debit" | "credit";
+
+export type Account = {
+  /** رقم الحساب في الدليل، مثل 1100 للصندوق. */
+  code: string;
+  name: string;
+  type: AccountType;
+  normalSide: NormalSide;
+  /** الحساب الأب في الشجرة؛ فارغ للحسابات الرئيسية. */
+  parent?: string;
+  /** حسابات النظام لا تُحذف لأن القيود الآلية تعتمد عليها. */
+  system: boolean;
+  active: boolean;
+};
+
+/** سطر في قيد اليومية: إما مدين أو دائن، لا كلاهما. */
+export type JournalLine = {
+  accountCode: string;
+  debit: number;
+  credit: number;
+  /** وصف السطر، يظهر في دفتر الأستاذ. */
+  memo: string;
+};
+
+/** قيد يومية مرحَّل؛ مجموع المدين يساوي مجموع الدائن دائمًا. */
+export type JournalEntry = {
+  no: number;
+  at: string;
+  /** نوع المستند المصدر: sale, purchase, expense… */
+  source: string;
+  /** رقم المستند المصدر، للربط والتتبع. */
+  sourceNo: number;
+  description: string;
+  lines: JournalLine[];
+  /** القيود المرحَّلة لا تُعدّل؛ الإلغاء يكون بقيد عكسي. */
+  reversedBy?: number;
+};
+
+/** فترة محاسبية مقفلة لا تقبل قيودًا جديدة. */
+export type FiscalPeriod = {
+  /** بداية الفترة المقفلة. */
+  from: string;
+  /** نهاية الفترة المقفلة؛ أي قيد قبلها مرفوض. */
+  to: string;
+  closedAt: string;
+  note: string;
+};
+
 /** الحالة الكاملة المحفوظة؛ كل ما يخص المحل في مكان واحد. */
 export type DbState = {
   version: number;
@@ -264,4 +322,7 @@ export type DbState = {
   expenses: Expense[];
   customers: Customer[];
   customerLedger: CustomerLedgerEntry[];
+  accounts: Account[];
+  journal: JournalEntry[];
+  closedPeriods: FiscalPeriod[];
 };

@@ -3,7 +3,7 @@
 import type { DbState, Product } from "./types";
 
 export const DB_KEY = "agri-db";
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 /** المفاتيح القديمة قبل توحيد التخزين؛ نقرأ منها مرة واحدة ثم نتركها كنسخة أمان. */
 const LEGACY_PRODUCTS = "agri-products";
@@ -22,6 +22,9 @@ export function emptyState(): DbState {
     expenses: [],
     customers: [],
     customerLedger: [],
+    accounts: [],
+    journal: [],
+    closedPeriods: [],
   };
 }
 
@@ -130,6 +133,14 @@ export function migrate(input: any): DbState {
     state.customers = state.customers || [];
     state.customerLedger = state.customerLedger || [];
     version = 9;
+  }
+
+  // 9 -> 10: دليل الحسابات وقيود اليومية والفترات المقفلة.
+  if (version < 10) {
+    state.accounts = state.accounts || [];
+    state.journal = state.journal || [];
+    state.closedPeriods = state.closedPeriods || [];
+    version = 10;
   }
 
   state.version = version;
