@@ -982,17 +982,24 @@ export default function Home() {
     invoiceNo: string,
     customer = "عميل نقدي"
   ) => {
-    const total = lines.reduce(
-      (sum, line) => sum + unitPrice(line, line.unitName) * line.qty,
-      0
+    const subtotal = round2(
+      lines.reduce((sum, line) => sum + unitPrice(line, line.unitName) * line.qty, 0)
     );
+    const lineDiscounts = round2(
+      lines.reduce((sum, line) => sum + (line.lineDiscount || 0), 0)
+    );
+    const taxTotal = round2(
+      lines.reduce((sum, line) => sum + (line.lineTax || 0), 0)
+    );
+    const invoiceCut = round2(Number(invoiceDiscount || 0));
+    const total = round2(subtotal - lineDiscounts - invoiceCut + taxTotal);
     const receipt = window.open("", "_blank", "width=380,height=700");
     if (!receipt) {
       toast.error("اسمح بالنوافذ المنبثقة لطباعة الفاتورة");
       return;
     }
     receipt.document.write(
-      `<html dir="rtl"><head><title>فاتورة ${invoiceNo}</title><style>body{width:72mm;margin:0 auto;padding:5mm 3mm;font-family:Arial,sans-serif;color:#111;font-size:12px}h1{text-align:center;font-size:19px;margin:0 0 4px}p{text-align:center;margin:3px 0;color:#555;font-size:10px}.line{border-top:1px dashed #777;margin:8px 0}.row{display:flex;justify-content:space-between;gap:8px;margin:7px 0}.row strong{font-size:11px}.total{font-size:16px;font-weight:bold;margin-top:12px}.thanks{text-align:center;font-size:11px;margin-top:18px}@media print{button{display:none}}</style></head><body><h1>دفتر الزراعة</h1><p>محل الواحة الزراعية</p><p>فاتورة بيع ${invoiceNo} · ${new Date().toLocaleString("ar-EG")}</p><p>العميل: ${customer}</p><div class="line"></div>${lines.map(line => `<div class="row"><span>${line.name} × ${line.qty} ${line.unitName}</span><strong>${money(unitPrice(line, line.unitName) * line.qty)}</strong></div>`).join("")}<div class="line"></div><div class="row total"><span>الإجمالي</span><strong>${money(total)}</strong></div><p class="thanks">شكرًا لتعاملكم معنا</p><script>window.onload=function(){window.print();}</script></body></html>`
+      `<html dir="rtl"><head><title>فاتورة ${invoiceNo}</title><style>body{width:72mm;margin:0 auto;padding:5mm 3mm;font-family:Arial,sans-serif;color:#111;font-size:12px}h1{text-align:center;font-size:19px;margin:0 0 4px}p{text-align:center;margin:3px 0;color:#555;font-size:10px}.line{border-top:1px dashed #777;margin:8px 0}.row{display:flex;justify-content:space-between;gap:8px;margin:7px 0}.row strong{font-size:11px}.total{font-size:16px;font-weight:bold;margin-top:12px}.thanks{text-align:center;font-size:11px;margin-top:18px}@media print{button{display:none}}</style></head><body><h1>دفتر الزراعة</h1><p>محل الواحة الزراعية</p><p>فاتورة بيع ${invoiceNo} · ${new Date().toLocaleString("ar-EG")}</p><p>العميل: ${customer}</p><div class="line"></div>${lines.map(line => `<div class="row"><span>${line.name} × ${line.qty} ${line.unitName}</span><strong>${money(round2(unitPrice(line, line.unitName) * line.qty - (line.lineDiscount || 0) + (line.lineTax || 0)))}</strong></div>`).join("")}<div class="line"></div>${lineDiscounts + invoiceCut > 0 ? `<div class="row"><span>الخصم</span><strong>(${money(round2(lineDiscounts + invoiceCut))})</strong></div>` : ""}${taxTotal > 0 ? `<div class="row"><span>الضريبة</span><strong>${money(taxTotal)}</strong></div>` : ""}<div class="row total"><span>الإجمالي</span><strong>${money(total)}</strong></div><p class="thanks">شكرًا لتعاملكم معنا</p><script>window.onload=function(){window.print();}</script></body></html>`
     );
     receipt.document.close();
   };
