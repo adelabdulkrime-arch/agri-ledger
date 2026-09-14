@@ -133,6 +133,33 @@ export type PaymentInstrument =
   | "transfer"
   | "cheque";
 
+/** سبب الإتلاف؛ يفصل ما انتهت صلاحيته عما كُسر أو فُقد. */
+export type DamageReason = "expired" | "broken" | "theft" | "other";
+
+/**
+ * إتلاف بضاعة: خروجها من المخزون بلا بيع.
+ *
+ * مفصول عن تسوية الجرد عمدًا: الجرد يصحّح خطأ عدٍّ، والإتلاف قرار
+ * واعٍ بخسارة بضاعة. خلطهما يخفي كم يخسر المحل فعلًا من التلف.
+ */
+export type DamageRecord = {
+  no: number;
+  at: string;
+  productId: number;
+  productName: string;
+  qty: number;
+  /** تكلفة الوحدة وقت الإتلاف؛ بها تُقيَّم الخسارة. */
+  unitCost: number;
+  total: number;
+  reason: DamageReason;
+  warehouseId?: number;
+  /** رقم التشغيلة إن كان الإتلاف من دفعة بعينها. */
+  batchId?: number;
+  lotNo?: string;
+  note: string;
+  recordedBy: string;
+};
+
 /**
  * قائمة أسعار: تسعيرة بديلة لمجموعة عملاء (جملة، مزارع كبيرة…).
  * لا تغيّر سعر الصنف الأصلي، بل تُقترح عند البيع لعميل مرتبط بها.
@@ -324,7 +351,9 @@ export type StockMoveType =
   | "PURCHASE_RETURN"
   | "SALE_RETURN"
   | "ADJUSTMENT"
-  | "PURCHASE_VOID";
+  | "PURCHASE_VOID"
+  /** إتلاف مقصود: تالف أو منتهٍ أو مفقود، مفصولًا عن تسويات الجرد. */
+  | "DAMAGE";
 
 export type StockMove = {
   id: number;
@@ -673,6 +702,8 @@ export type DbState = {
   prepaidExpenses?: PrepaidExpense[];
   /** مراكز التكلفة. */
   costCenters?: CostCenter[];
+  /** سجل البضاعة المتلفة. */
+  damages?: DamageRecord[];
   /**
    * مفاتيح حركات البنك التي ظهرت في كشف الحساب، بصيغة "رقم القيد:رقم السطر".
    * تُحفظ حتى لا يُعاد التأشير في كل مرة تُفتح فيها التسوية.

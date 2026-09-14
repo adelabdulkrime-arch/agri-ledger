@@ -34,6 +34,7 @@ import {
   Printer,
   Scale,
   Search,
+  PackageX,
   Settings2,
   ShieldCheck,
   Tags,
@@ -135,6 +136,7 @@ import type {
   Product,
   Purchase,
   PaymentInstrument,
+  DamageReason,
   Draft,
   Sale,
   ShopSettings,
@@ -166,6 +168,7 @@ import {
   createPriceList,
   setListPrice,
 } from "../data/pricing";
+import { DAMAGE_REASON_LABELS, recordDamage } from "../data/damage";
 const BarcodeScanner = lazy(() => import("../components/BarcodeScanner"));
 const PurchaseDialog = lazy(() => import("../components/PurchaseDialog"));
 import SuppliersBoard from "../components/SuppliersBoard";
@@ -189,6 +192,8 @@ import DraftsBoard from "../components/DraftsBoard";
 import WarehousesBoard from "../components/WarehousesBoard";
 import AssetsBoard from "../components/AssetsBoard";
 import PricingBoard from "../components/PricingBoard";
+import DamageBoard from "../components/DamageBoard";
+import ReorderBoard from "../components/ReorderBoard";
 import ProductUnitsDialog from "../components/ProductUnitsDialog";
 import { useUsbScanner } from "../hooks/useUsbScanner";
 import { useInstallPrompt } from "../hooks/useInstallPrompt";
@@ -289,6 +294,8 @@ const menu = [
   { id: "reports", label: "التقارير", icon: BarChart3 },
   { id: "aging", label: "أعمار الديون", icon: HandCoins },
   { id: "warehouses", label: "المخازن والفروع", icon: WarehouseIcon },
+  { id: "reorder", label: "اقتراح الطلب", icon: TrendingUp },
+  { id: "damage", label: "التالف والفاقد", icon: PackageX },
   { id: "assets", label: "الأصول والمقدمات", icon: Landmark },
   { id: "pricing", label: "الأسعار والمراكز", icon: Tags },
   { id: "drafts", label: "العروض والأوامر", icon: ClipboardList },
@@ -393,6 +400,7 @@ export default function Home() {
   const [unitsProduct, setUnitsProduct] = useState<Product | null>(null);
   const [payingPurchase, setPayingPurchase] = useState<Purchase | null>(null);
   const [showWarehouse, setShowWarehouse] = useState(false);
+  const [showDamage, setShowDamage] = useState(false);
   const [showAsset, setShowAsset] = useState(false);
   const [showPrepaid, setShowPrepaid] = useState(false);
   const [showPriceList, setShowPriceList] = useState(false);
@@ -1035,6 +1043,30 @@ export default function Home() {
       draft => logout(draft),
       () => toast.success("تم تسجيل الخروج")
     );
+
+  const submitDamage = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    runSafe(
+      draft =>
+        recordDamage(draft, {
+          productId: Number(fd.get("productId")),
+          qty: Number(fd.get("qty") || 0),
+          reason: String(fd.get("reason") || "other") as DamageReason,
+          warehouseId: Number(fd.get("warehouseId")) || undefined,
+          batchId: Number(fd.get("batchId")) || undefined,
+          note: String(fd.get("note") || ""),
+        }),
+      rec => {
+        setShowDamage(false);
+        toast.success(
+          `سُجّل إتلاف ${rec.qty} من ${rec.productName} بخسارة ${money(rec.total)}`
+        );
+      }
+    );
+  };
+
+  const onAddDamage = () => setShowDamage(true);
 
   const submitAsset = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -1894,6 +1926,7 @@ export default function Home() {
             onAddWarehouse={onAddWarehouse}
             onEditWarehouse={onEditWarehouse}
             onTransferStock={onTransferStock}
+            onAddDamage={onAddDamage}
             onAddAsset={onAddAsset}
             onAddPrepaid={onAddPrepaid}
             onPostDepreciation={onPostDepreciation}
@@ -2250,6 +2283,77 @@ export default function Home() {
             onAddBarcode={productUnitActions.addBarcode}
             onRemoveBarcode={productUnitActions.removeBarcode}
           />
+        </Modal>
+      )}
+      {showDamage && (
+        <Modal title="تسجيل إتلاف" onClose={() => setShowDamage(false)}>
+          <form className="product-form" onSubmit={submitDamage}>
+            <label className="field">
+              <span>الصنف</span>
+              <select name="productId" className="category-select" required>
+                {products.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} — الرصيد {p.stock} {p.unit}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="form-grid">
+              <label className="field">
+                <span>الكمية</span>
+                <input name="qty" type="number" min="0" step="any" required />
+              </label>
+              <label className="field">
+                <span>السبب</span>
+                <select name="reason" className="category-select" required>
+                  {(
+                    Object.keys(DAMAGE_REASON_LABELS) as DamageReason[]
+                  ).map(key => (
+                    <option key={key} value={key}>
+                      {DAMAGE_REASON_LABELS[key]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {(state.warehouses || []).filter(w => w.active).length > 1 && (
+                <label className="field">
+                  <span>المخزن</span>
+                  <select name="warehouseId" className="category-select">
+                    {(state.warehouses || [])
+                      .filter(w => w.active)
+                      .map(w => (
+                        <option key={w.id} value={w.id}>
+                          {w.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              )}
+              {(state.batches || []).some(b => b.qtyRemaining > 0) && (
+                <label className="field">
+                  <span>التشغيلة (اختياري)</span>
+                  <select name="batchId" className="category-select">
+                    <option value="">بلا تحديد</option>
+                    {(state.batches || [])
+                      .filter(b => b.qtyRemaining > 0)
+                      .map(b => (
+                        <option key={b.id} value={b.id}>
+                          {b.productName} · {b.lotNo} · متبقٍ {b.qtyRemaining}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              )}
+            </div>
+            <SupplierField label="ملاحظة" name="note" placeholder="اختياري" />
+            <div className="search-hint">
+              تُخصم الكمية من الرصيد وتُحمَّل تكلفتها خسارةً باسمها، مفصولةً
+              عن تسويات الجرد.
+            </div>
+            <button className="primary-btn full" type="submit">
+              <Check size={18} /> تسجيل الإتلاف
+            </button>
+          </form>
         </Modal>
       )}
       {showAsset && (
@@ -3080,6 +3184,7 @@ function ModuleView({
   onAddWarehouse,
   onEditWarehouse,
   onTransferStock,
+  onAddDamage,
   onAddAsset,
   onAddPrepaid,
   onPostDepreciation,
@@ -3123,6 +3228,14 @@ function ModuleView({
     warehouses: [
       "المخازن والفروع",
       "رصيد كل مكان على حدة، والتحويل بينها.",
+    ],
+    reorder: [
+      "اقتراح الطلب",
+      "ماذا تشتري وكم ومن أين، مقيسًا من بيعك الفعلي.",
+    ],
+    damage: [
+      "التالف والفاقد",
+      "ما خرج من المخزون بلا بيع، وكم كلّفك.",
     ],
     assets: [
       "الأصول والمقدمات",
@@ -3438,6 +3551,10 @@ function ModuleView({
         <AgingBoard state={state} money={moneyFn} />
       ) : active === "vat" ? (
         <VatBoard state={state} money={moneyFn} />
+      ) : active === "reorder" ? (
+        <ReorderBoard state={state} money={moneyFn} />
+      ) : active === "damage" ? (
+        <DamageBoard state={state} money={moneyFn} onAdd={onAddDamage} />
       ) : active === "assets" ? (
         <AssetsBoard
           state={state}

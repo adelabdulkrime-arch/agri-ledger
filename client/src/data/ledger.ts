@@ -38,6 +38,8 @@ export const ACC = {
   expenses: "5200",
   inventoryAdjust: "5300",
   depreciation: "5400",
+  /** خسائر التالف، مفصولة عن تسويات الجرد ليُعرف حجم التلف وحده. */
+  damageLoss: "5500",
 } as const;
 
 /**
@@ -98,6 +100,7 @@ export function defaultChart(): Account[] {
     a(ACC.expenses, "مصروفات تشغيلية", "expense", "5000"),
     a(ACC.inventoryAdjust, "تسويات المخزون", "expense", "5000"),
     a(ACC.depreciation, "إهلاك الأصول", "expense", "5000"),
+    a(ACC.damageLoss, "خسائر التالف", "expense", "5000"),
   ];
 }
 

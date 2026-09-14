@@ -2109,4 +2109,5 @@ export const MOVE_LABELS: Record<StockMoveType, string> = {
   SALE_RETURN: "مرتجع بيع",
   ADJUSTMENT: "تسوية",
   PURCHASE_VOID: "إلغاء شراء",
+  DAMAGE: "إتلاف",
 };
