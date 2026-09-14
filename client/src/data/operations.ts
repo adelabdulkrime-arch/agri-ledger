@@ -1385,6 +1385,8 @@ export type ExpenseInput = {
   notes?: string;
   /** أداة الدفع؛ افتراضها نقد كما في النسخ السابقة. */
   instrument?: PaymentInstrument;
+  /** مركز التكلفة الذي يُنسب إليه المصروف؛ اختياري. */
+  costCenterId?: number;
 };
 
 export function addExpense(state: DbState, input: ExpenseInput): Expense {
@@ -1405,6 +1407,7 @@ export function addExpense(state: DbState, input: ExpenseInput): Expense {
     reference: (input.reference || "").trim(),
     notes: (input.notes || "").trim(),
     instrument: input.instrument || "cash",
+    costCenterId: input.costCenterId,
   };
   state.expenses.unshift(expense);
 

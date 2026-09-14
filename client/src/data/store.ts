@@ -3,7 +3,7 @@
 import type { DbState, Product } from "./types";
 
 export const DB_KEY = "agri-db";
-export const SCHEMA_VERSION = 19;
+export const SCHEMA_VERSION = 20;
 
 /** المفاتيح القديمة قبل توحيد التخزين؛ نقرأ منها مرة واحدة ثم نتركها كنسخة أمان. */
 const LEGACY_PRODUCTS = "agri-products";
@@ -43,6 +43,10 @@ export function emptyState(): DbState {
       },
     ],
     transfers: [],
+    priceLists: [],
+    fixedAssets: [],
+    prepaidExpenses: [],
+    costCenters: [],
     settings: {
       name: "",
       tradeName: "",
@@ -268,6 +272,15 @@ export function migrate(input: any): DbState {
       });
     state.transfers = state.transfers || [];
     version = 19;
+  }
+
+  // 19 -> 20: قوائم الأسعار، الأصول الثابتة، المصروفات المقدمة، مراكز التكلفة.
+  if (version < 20) {
+    state.priceLists = state.priceLists || [];
+    state.fixedAssets = state.fixedAssets || [];
+    state.prepaidExpenses = state.prepaidExpenses || [];
+    state.costCenters = state.costCenters || [];
+    version = 20;
   }
 
   state.version = version;

@@ -134,6 +134,65 @@ export type PaymentInstrument =
   | "cheque";
 
 /**
+ * قائمة أسعار: تسعيرة بديلة لمجموعة عملاء (جملة، مزارع كبيرة…).
+ * لا تغيّر سعر الصنف الأصلي، بل تُقترح عند البيع لعميل مرتبط بها.
+ */
+export type PriceList = {
+  id: number;
+  name: string;
+  note: string;
+  active: boolean;
+  /** أسعار الأصناف في هذه القائمة؛ ما لم يُذكر يبقى بسعره المعتاد. */
+  items: { productId: number; price: number }[];
+  createdAt: string;
+};
+
+/** أصل ثابت يُهلك على مدى عمره الإنتاجي بالقسط الثابت. */
+export type FixedAsset = {
+  id: number;
+  name: string;
+  /** تكلفة الشراء الأصلية؛ لا تتغير بالإهلاك. */
+  cost: number;
+  /** تاريخ دخوله الخدمة، ومنه يبدأ الإهلاك. */
+  purchasedAt: string;
+  /** العمر الإنتاجي بالسنوات. */
+  usefulLifeYears: number;
+  /** القيمة المتوقعة عند نهاية العمر؛ لا تُهلك. */
+  salvageValue: number;
+  /** مجمع ما رُحّل من إهلاك حتى الآن. */
+  accumulated: number;
+  /** آخر شهر رُحّل عنه الإهلاك، بصيغة YYYY-MM، لمنع الترحيل مرتين. */
+  lastPostedMonth?: string;
+  note: string;
+  active: boolean;
+};
+
+/** مصروف مدفوع مقدمًا يُستهلك على أشهر (إيجار سنوي، تأمين…). */
+export type PrepaidExpense = {
+  id: number;
+  description: string;
+  /** المبلغ المدفوع كاملًا. */
+  amount: number;
+  /** بداية الاستفادة. */
+  startAt: string;
+  /** عدد الأشهر التي يغطيها. */
+  months: number;
+  category: ExpenseCategory;
+  /** ما استُهلك منه وحُمّل على المصروف. */
+  amortized: number;
+  lastPostedMonth?: string;
+  note: string;
+};
+
+/** مركز تكلفة: فرع أو نشاط تُنسب إليه المصروفات لمعرفة كلفته. */
+export type CostCenter = {
+  id: number;
+  name: string;
+  note: string;
+  active: boolean;
+};
+
+/**
  * مخزن أو فرع: مكان تخزين مستقل برصيده.
  *
  * حدٌّ مقصود: التكلفة تبقى متوسطًا مرجحًا واحدًا للصنف في كل المخازن،
@@ -355,6 +414,8 @@ export type Expense = {
   notes: string;
   /** أداة الدفع؛ غيابها يعني نقدًا كما في النسخ السابقة. */
   instrument?: PaymentInstrument;
+  /** مركز التكلفة الذي يُنسب إليه المصروف؛ اختياري. */
+  costCenterId?: number;
 };
 
 
@@ -604,6 +665,14 @@ export type DbState = {
   warehouses?: Warehouse[];
   /** تحويلات البضاعة بين المخازن. */
   transfers?: Transfer[];
+  /** قوائم الأسعار البديلة. */
+  priceLists?: PriceList[];
+  /** الأصول الثابتة وإهلاكها. */
+  fixedAssets?: FixedAsset[];
+  /** المصروفات المدفوعة مقدمًا. */
+  prepaidExpenses?: PrepaidExpense[];
+  /** مراكز التكلفة. */
+  costCenters?: CostCenter[];
   /**
    * مفاتيح حركات البنك التي ظهرت في كشف الحساب، بصيغة "رقم القيد:رقم السطر".
    * تُحفظ حتى لا يُعاد التأشير في كل مرة تُفتح فيها التسوية.

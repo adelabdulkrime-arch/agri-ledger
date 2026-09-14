@@ -36,6 +36,7 @@ import {
   Search,
   Settings2,
   ShieldCheck,
+  Tags,
   ShoppingBag,
   ShoppingCart,
   Sprout,
@@ -154,6 +155,17 @@ import {
   transferStock,
   updateWarehouse,
 } from "../data/warehouses";
+import {
+  createAsset,
+  createPrepaid,
+  postMonthlyAmortization,
+  postMonthlyDepreciation,
+} from "../data/assets";
+import {
+  createCostCenter,
+  createPriceList,
+  setListPrice,
+} from "../data/pricing";
 const BarcodeScanner = lazy(() => import("../components/BarcodeScanner"));
 const PurchaseDialog = lazy(() => import("../components/PurchaseDialog"));
 import SuppliersBoard from "../components/SuppliersBoard";
@@ -175,6 +187,8 @@ import VouchersBoard from "../components/VouchersBoard";
 import ReconcileBoard from "../components/ReconcileBoard";
 import DraftsBoard from "../components/DraftsBoard";
 import WarehousesBoard from "../components/WarehousesBoard";
+import AssetsBoard from "../components/AssetsBoard";
+import PricingBoard from "../components/PricingBoard";
 import ProductUnitsDialog from "../components/ProductUnitsDialog";
 import { useUsbScanner } from "../hooks/useUsbScanner";
 import { useInstallPrompt } from "../hooks/useInstallPrompt";
@@ -275,6 +289,8 @@ const menu = [
   { id: "reports", label: "التقارير", icon: BarChart3 },
   { id: "aging", label: "أعمار الديون", icon: HandCoins },
   { id: "warehouses", label: "المخازن والفروع", icon: WarehouseIcon },
+  { id: "assets", label: "الأصول والمقدمات", icon: Landmark },
+  { id: "pricing", label: "الأسعار والمراكز", icon: Tags },
   { id: "drafts", label: "العروض والأوامر", icon: ClipboardList },
   { id: "vouchers", label: "سندات القبض والصرف", icon: ReceiptText },
   { id: "reconcile", label: "التسوية البنكية", icon: Landmark },
@@ -377,6 +393,10 @@ export default function Home() {
   const [unitsProduct, setUnitsProduct] = useState<Product | null>(null);
   const [payingPurchase, setPayingPurchase] = useState<Purchase | null>(null);
   const [showWarehouse, setShowWarehouse] = useState(false);
+  const [showAsset, setShowAsset] = useState(false);
+  const [showPrepaid, setShowPrepaid] = useState(false);
+  const [showPriceList, setShowPriceList] = useState(false);
+  const [showCostCenter, setShowCostCenter] = useState(false);
   const [editingWarehouse, setEditingWarehouse] = useState<Warehouse | null>(
     null
   );
@@ -816,6 +836,7 @@ export default function Home() {
           instrument: String(
             fd.get("instrument") || "cash"
           ) as PaymentInstrument,
+          costCenterId: Number(fd.get("costCenterId")) || undefined,
         }),
       () => {
         setShowExpense(false);
@@ -1014,6 +1035,114 @@ export default function Home() {
       draft => logout(draft),
       () => toast.success("تم تسجيل الخروج")
     );
+
+  const submitAsset = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    runSafe(
+      draft =>
+        createAsset(draft, {
+          name: String(fd.get("name") || ""),
+          cost: Number(fd.get("cost") || 0),
+          usefulLifeYears: Number(fd.get("years") || 0),
+          salvageValue: Number(fd.get("salvage") || 0),
+          note: String(fd.get("note") || ""),
+        }),
+      a => {
+        setShowAsset(false);
+        toast.success(`أُضيف ${a.name} بقسط شهري ${money(
+          round2((a.cost - a.salvageValue) / (a.usefulLifeYears * 12))
+        )}`);
+      }
+    );
+  };
+
+  const submitPrepaid = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    runSafe(
+      draft =>
+        createPrepaid(draft, {
+          description: String(fd.get("description") || ""),
+          amount: Number(fd.get("amount") || 0),
+          months: Number(fd.get("months") || 0),
+          category: String(fd.get("category")) as ExpenseCategory,
+          note: String(fd.get("note") || ""),
+        }),
+      () => {
+        setShowPrepaid(false);
+        toast.success("سُجّل المصروف المقدم كأصل، وسيتوزع على أشهره");
+      }
+    );
+  };
+
+  /** الترحيل مرة واحدة لكل شهر؛ تكراره لا يضاعف شيئًا. */
+  const onPostDepreciation = () =>
+    runSafe(
+      draft => postMonthlyDepreciation(draft),
+      out =>
+        toast.success(
+          out.total > 0
+            ? `رُحّل إهلاك ${out.assets} أصلًا بقيمة ${money(out.total)}`
+            : "لا شيء للترحيل هذا الشهر"
+        )
+    );
+
+  const onPostAmortization = () =>
+    runSafe(
+      draft => postMonthlyAmortization(draft),
+      out =>
+        toast.success(
+          out.total > 0
+            ? `حُمّل ${money(out.total)} من المصروفات المقدمة`
+            : "لا شيء للترحيل هذا الشهر"
+        )
+    );
+
+  const onAddAsset = () => setShowAsset(true);
+  const onAddPrepaid = () => setShowPrepaid(true);
+
+  const submitPriceList = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    runSafe(
+      draft =>
+        createPriceList(draft, {
+          name: String(fd.get("name") || ""),
+          note: String(fd.get("note") || ""),
+        }),
+      () => {
+        setShowPriceList(false);
+        toast.success("أُنشئت القائمة؛ سعّر فيها ما يختلف عن سعره المعتاد");
+      }
+    );
+  };
+
+  const submitCostCenter = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    runSafe(
+      draft =>
+        createCostCenter(draft, {
+          name: String(fd.get("name") || ""),
+          note: String(fd.get("note") || ""),
+        }),
+      () => {
+        setShowCostCenter(false);
+        toast.success("أُضيف مركز التكلفة");
+      }
+    );
+  };
+
+  const onAddPriceList = () => setShowPriceList(true);
+  const onAddCostCenter = () => setShowCostCenter(true);
+
+  /** تعديل سعر صنف في قائمة؛ صفر يزيل التخصيص فيعود للسعر المعتاد. */
+  const onSetListPrice = (
+    listId: number,
+    productId: number,
+    price: number
+  ) => runSafe(draft => setListPrice(draft, listId, productId, price));
 
   const submitWarehouse = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -1765,6 +1894,13 @@ export default function Home() {
             onAddWarehouse={onAddWarehouse}
             onEditWarehouse={onEditWarehouse}
             onTransferStock={onTransferStock}
+            onAddAsset={onAddAsset}
+            onAddPrepaid={onAddPrepaid}
+            onPostDepreciation={onPostDepreciation}
+            onPostAmortization={onPostAmortization}
+            onAddPriceList={onAddPriceList}
+            onAddCostCenter={onAddCostCenter}
+            onSetListPrice={onSetListPrice}
             onCloseSession={() => setShowCloseSession(true)}
             onOpenUnits={(p: Product) => setUnitsProduct(p)}
             onDeleteExpense={removeExpense}
@@ -2116,6 +2252,113 @@ export default function Home() {
           />
         </Modal>
       )}
+      {showAsset && (
+        <Modal title="أصل ثابت جديد" onClose={() => setShowAsset(false)}>
+          <form className="product-form" onSubmit={submitAsset}>
+            <SupplierField
+              label="اسم الأصل"
+              name="name"
+              placeholder="ثلاجة عرض"
+            />
+            <div className="form-grid">
+              <label className="field">
+                <span>التكلفة</span>
+                <input name="cost" type="number" min="0" step="any" required />
+              </label>
+              <label className="field">
+                <span>العمر الإنتاجي (سنوات)</span>
+                <input name="years" type="number" min="1" step="any" required />
+              </label>
+              <label className="field">
+                <span>القيمة التخريدية</span>
+                <input name="salvage" type="number" min="0" step="any" />
+              </label>
+            </div>
+            <SupplierField label="ملاحظة" name="note" placeholder="اختياري" />
+            <div className="search-hint">
+              يُهلك بالقسط الثابت شهريًا. القيمة التخريدية لا تُهلك، والأصل
+              لا تنزل قيمته تحتها.
+            </div>
+            <button className="primary-btn full" type="submit">
+              <Check size={18} /> حفظ الأصل
+            </button>
+          </form>
+        </Modal>
+      )}
+      {showPrepaid && (
+        <Modal title="مصروف مدفوع مقدمًا" onClose={() => setShowPrepaid(false)}>
+          <form className="product-form" onSubmit={submitPrepaid}>
+            <SupplierField
+              label="الوصف"
+              name="description"
+              placeholder="إيجار سنة"
+            />
+            <div className="form-grid">
+              <label className="field">
+                <span>المبلغ المدفوع</span>
+                <input name="amount" type="number" min="0" step="any" required />
+              </label>
+              <label className="field">
+                <span>عدد الأشهر</span>
+                <input name="months" type="number" min="1" required />
+              </label>
+              <label className="field">
+                <span>البند</span>
+                <select name="category" className="category-select" required>
+                  {Object.entries(EXPENSE_LABELS).map(([id, label]) => (
+                    <option key={id} value={id}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <SupplierField label="ملاحظة" name="note" placeholder="اختياري" />
+            <div className="search-hint">
+              يُسجَّل أصلًا الآن، ثم يُحمَّل على المصروف شهرًا بشهر.
+            </div>
+            <button className="primary-btn full" type="submit">
+              <Check size={18} /> حفظ
+            </button>
+          </form>
+        </Modal>
+      )}
+      {showPriceList && (
+        <Modal title="قائمة أسعار جديدة" onClose={() => setShowPriceList(false)}>
+          <form className="product-form" onSubmit={submitPriceList}>
+            <SupplierField
+              label="اسم القائمة"
+              name="name"
+              placeholder="أسعار الجملة"
+            />
+            <SupplierField label="ملاحظة" name="note" placeholder="اختياري" />
+            <div className="search-hint">
+              سعّر فيها ما يختلف عن سعره المعتاد فقط؛ الباقي يبقى بسعره.
+            </div>
+            <button className="primary-btn full" type="submit">
+              <Check size={18} /> حفظ القائمة
+            </button>
+          </form>
+        </Modal>
+      )}
+      {showCostCenter && (
+        <Modal title="مركز تكلفة جديد" onClose={() => setShowCostCenter(false)}>
+          <form className="product-form" onSubmit={submitCostCenter}>
+            <SupplierField
+              label="الاسم"
+              name="name"
+              placeholder="الفرع الثاني"
+            />
+            <SupplierField label="ملاحظة" name="note" placeholder="اختياري" />
+            <div className="search-hint">
+              اختره عند تسجيل المصروف لتعرف كلفة كل فرع أو نشاط على حدة.
+            </div>
+            <button className="primary-btn full" type="submit">
+              <Check size={18} /> حفظ المركز
+            </button>
+          </form>
+        </Modal>
+      )}
       {showWarehouse && (
         <Modal
           title={editingWarehouse ? "تعديل مخزن" : "مخزن جديد"}
@@ -2458,6 +2701,21 @@ export default function Home() {
                   ))}
                 </select>
               </label>
+              {(state.costCenters || []).filter(c => c.active).length > 0 && (
+                <label className="field">
+                  <span>مركز التكلفة</span>
+                  <select name="costCenterId" className="category-select">
+                    <option value="">غير منسوب</option>
+                    {(state.costCenters || [])
+                      .filter(c => c.active)
+                      .map(c => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              )}
             </div>
             <button className="primary-btn full" type="submit">
               <Check size={18} /> حفظ المصروف
@@ -2822,6 +3080,13 @@ function ModuleView({
   onAddWarehouse,
   onEditWarehouse,
   onTransferStock,
+  onAddAsset,
+  onAddPrepaid,
+  onPostDepreciation,
+  onPostAmortization,
+  onAddPriceList,
+  onAddCostCenter,
+  onSetListPrice,
   onCloseSession,
   onDeleteExpense,
   search,
@@ -2858,6 +3123,14 @@ function ModuleView({
     warehouses: [
       "المخازن والفروع",
       "رصيد كل مكان على حدة، والتحويل بينها.",
+    ],
+    assets: [
+      "الأصول والمقدمات",
+      "ما دفعتَه ولم تستهلكه بعد: أصول تُهلك ومصروفات تتوزع.",
+    ],
+    pricing: [
+      "الأسعار والمراكز",
+      "تسعيرة بديلة لفئة عملاء، وإنفاق كل فرع على حدة.",
     ],
     drafts: [
       "العروض والأوامر",
@@ -3165,6 +3438,23 @@ function ModuleView({
         <AgingBoard state={state} money={moneyFn} />
       ) : active === "vat" ? (
         <VatBoard state={state} money={moneyFn} />
+      ) : active === "assets" ? (
+        <AssetsBoard
+          state={state}
+          money={moneyFn}
+          onAddAsset={onAddAsset}
+          onAddPrepaid={onAddPrepaid}
+          onPostDepreciation={onPostDepreciation}
+          onPostAmortization={onPostAmortization}
+        />
+      ) : active === "pricing" ? (
+        <PricingBoard
+          state={state}
+          money={moneyFn}
+          onAddList={onAddPriceList}
+          onAddCenter={onAddCostCenter}
+          onSetPrice={onSetListPrice}
+        />
       ) : active === "warehouses" ? (
         <WarehousesBoard
           state={state}

@@ -22,6 +22,12 @@ export const ACC = {
   inventory: "1300",
   /** ضريبة مدخلات مدفوعة للموردين، تُخصم من ضريبة المخرجات لا تُحمَّل على التكلفة. */
   vatInput: "1400",
+  /** أصول ثابتة بتكلفتها الأصلية؛ لا تُنقص بل يقابلها مجمع الإهلاك. */
+  fixedAssets: "1500",
+  /** مجمع الإهلاك: حساب مقابل للأصل، طبيعته دائنة رغم تصنيفه أصلًا. */
+  accumDepreciation: "1600",
+  /** مصروفات مدفوعة مقدمًا ولم تُستهلك بعد؛ أصل حتى تنقضي مدتها. */
+  prepaid: "1700",
   payables: "2100",
   vatPayable: "2200",
   capital: "3100",
@@ -31,6 +37,7 @@ export const ACC = {
   cogs: "5100",
   expenses: "5200",
   inventoryAdjust: "5300",
+  depreciation: "5400",
 } as const;
 
 /**
@@ -61,6 +68,14 @@ export function defaultChart(): Account[] {
     a(ACC.receivables, "ذمم مدينة — العملاء", "asset", "1000"),
     a(ACC.inventory, "المخزون", "asset", "1000"),
     a(ACC.vatInput, "ضريبة القيمة المضافة — مدخلات", "asset", "1000"),
+    a(ACC.fixedAssets, "أصول ثابتة", "asset", "1000"),
+    // مجمع الإهلاك حساب مقابل للأصل: طبيعته دائنة رغم تصنيفه أصلًا،
+    // فهو ينقص قيمة الأصل ولا يزيدها.
+    {
+      ...a(ACC.accumDepreciation, "مجمع الإهلاك", "asset", "1000"),
+      normalSide: "credit" as const,
+    },
+    a(ACC.prepaid, "مصروفات مدفوعة مقدمًا", "asset", "1000"),
 
     a("2000", "الخصوم", "liability"),
     a(ACC.payables, "ذمم دائنة — الموردون", "liability", "2000"),
@@ -82,6 +97,7 @@ export function defaultChart(): Account[] {
     a(ACC.cogs, "تكلفة البضاعة المباعة", "expense", "5000"),
     a(ACC.expenses, "مصروفات تشغيلية", "expense", "5000"),
     a(ACC.inventoryAdjust, "تسويات المخزون", "expense", "5000"),
+    a(ACC.depreciation, "إهلاك الأصول", "expense", "5000"),
   ];
 }
 
