@@ -3,7 +3,7 @@
 import type { DbState, Product } from "./types";
 
 export const DB_KEY = "agri-db";
-export const SCHEMA_VERSION = 15;
+export const SCHEMA_VERSION = 17;
 
 /** المفاتيح القديمة قبل توحيد التخزين؛ نقرأ منها مرة واحدة ثم نتركها كنسخة أمان. */
 const LEGACY_PRODUCTS = "agri-products";
@@ -29,6 +29,8 @@ export function emptyState(): DbState {
     batches: [],
     users: [],
     auditLog: [],
+    vouchers: [],
+    reconciled: [],
     settings: {
       name: "",
       tradeName: "",
@@ -217,6 +219,18 @@ export function migrate(input: any): DbState {
         vatRegistered: false,
       };
     version = 15;
+  }
+
+  // 15 -> 16: سندات القبض والصرف كمستندات مستقلة مرقّمة.
+  if (version < 16) {
+    state.vouchers = state.vouchers || [];
+    version = 16;
+  }
+
+  // 16 -> 17: تأشير حركات البنك المطابقة لكشف الحساب.
+  if (version < 17) {
+    state.reconciled = state.reconciled || [];
+    version = 17;
   }
 
   state.version = version;

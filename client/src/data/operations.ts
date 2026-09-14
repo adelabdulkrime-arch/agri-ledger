@@ -18,8 +18,11 @@ import type {
   StockReturn,
   Expense,
   ExpenseCategory,
+  PaymentInstrument,
   Product,
   ProductUnit,
+  Voucher,
+  VoucherKind,
 } from "./types";
 import { nextId, nextNumber } from "./store";
 import { ACC, postJournal, reverseJournal } from "./ledger";
@@ -35,6 +38,86 @@ function fail(message: string): never {
 /** تقريب لخانتين يمنع تراكم أخطاء الفاصلة العائمة في المبالغ. */
 export function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+export const INSTRUMENT_LABELS: Record<PaymentInstrument, string> = {
+  cash: "نقدًا",
+  bank: "تحويل بنكي",
+  card: "شبكة / بطاقة",
+  transfer: "حوالة",
+  cheque: "شيك",
+};
+
+/**
+ * الحساب الذي تمر عليه الحركة حسب أداتها.
+ *
+ * ما عدا النقد لا يدخل درج الصندوق، فيُرحَّل على البنك. هذا ما يجعل جرد
+ * الوردية صادقًا: بيع الشبكة إيراد حقيقي لكنه ليس نقدًا في الدرج.
+ */
+export function instrumentAccount(instrument: PaymentInstrument = "cash") {
+  return instrument === "cash" ? ACC.cash : ACC.bank;
+}
+
+/**
+ * يحرّر سند قبض أو صرف: مستند مرقّم يثبت من دفع ولمن وبأي أداة.
+ *
+ * السند مستقل عن القيد المحاسبي: القيد يحرّك الحسابات، والسند ورقة
+ * يوقّعها الطرفان ويُرجع إليها عند الخلاف.
+ */
+export function createVoucher(
+  state: DbState,
+  input: {
+    kind: VoucherKind;
+    party: string;
+    amount: number;
+    instrument?: PaymentInstrument;
+    customerId?: number;
+    supplierId?: number;
+    reference?: string;
+    refType?: string;
+    refNo?: number;
+    note?: string;
+    at?: string;
+  }
+): Voucher {
+  if (!state.vouchers) state.vouchers = [];
+
+  const voucher: Voucher = {
+    // البذرة 8999 ليبدأ أول سند من 9000، كما تبدأ المشتريات من 5001.
+    no: nextNumber(state.vouchers, 8999),
+    kind: input.kind,
+    at: input.at || new Date().toISOString(),
+    party: input.party,
+    customerId: input.customerId,
+    supplierId: input.supplierId,
+    amount: round2(input.amount),
+    instrument: input.instrument || "cash",
+    reference: (input.reference || "").trim(),
+    refType: input.refType,
+    refNo: input.refNo,
+    note: (input.note || "").trim(),
+    // اسم من حرّر السند إن كان هناك مستخدم نشط.
+    issuedBy:
+      (state.users || []).find(u => u.id === state.currentUserId)?.name ||
+      "غير محدد",
+  };
+  state.vouchers.unshift(voucher);
+  return voucher;
+}
+
+/** سندات طرف بعينه، من الأحدث. */
+export function vouchersOf(
+  state: DbState,
+  filter: { kind?: VoucherKind; customerId?: number; supplierId?: number } = {}
+) {
+  return (state.vouchers || [])
+    .filter(v => {
+      if (filter.kind && v.kind !== filter.kind) return false;
+      if (filter.customerId && v.customerId !== filter.customerId) return false;
+      if (filter.supplierId && v.supplierId !== filter.supplierId) return false;
+      return true;
+    })
+    .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
 }
 
 // ---------------------------------------------------------------- الموردون
@@ -217,6 +300,8 @@ export type PurchaseInput = {
   }[];
   paymentMethod: PaymentMethod;
   paid?: number;
+  /** أداة الدفع؛ افتراضها نقد كما في النسخ السابقة. */
+  instrument?: PaymentInstrument;
 };
 
 /** يتحقق من المدخلات ويحسب الإجماليات؛ يرمي OperationError عند أي خلل. */
@@ -384,9 +469,9 @@ export function postPurchase(state: DbState, input: PurchaseInput): Purchase {
     });
   if (purchase.paid > 0)
     credited.push({
-      accountCode: ACC.cash,
+      accountCode: instrumentAccount(input.instrument),
       credit: purchase.paid,
-      memo: "سداد نقدي",
+      memo: INSTRUMENT_LABELS[input.instrument || "cash"],
     });
   if (purchase.balance > 0)
     credited.push({
@@ -573,7 +658,8 @@ export function editPurchase(
 export function payPurchase(
   state: DbState,
   no: number,
-  amount: number
+  amount: number,
+  options: { instrument?: PaymentInstrument; reference?: string } = {}
 ): Purchase {
   const purchase = state.purchases.find(p => p.no === no);
   if (!purchase) fail("الفاتورة غير موجودة");
@@ -598,14 +684,31 @@ export function payPurchase(
     note: `سداد على فاتورة #${no}`,
   });
 
-  // قيد السداد: ينقص ما علينا للمورد وينقص الصندوق.
+  // سند صرف يثبت الدفعة كمستند مستقل عن القيد.
+  createVoucher(state, {
+    kind: "payment",
+    party: purchase.supplierName,
+    supplierId: purchase.supplierId,
+    amount: value,
+    instrument: options.instrument,
+    reference: options.reference,
+    refType: "purchase",
+    refNo: no,
+    note: `سداد على فاتورة #${no}`,
+  });
+
+  // قيد السداد: ينقص ما علينا للمورد وينقص الصندوق أو البنك حسب الأداة.
   postJournal(state, {
     source: "payment",
     sourceNo: no,
     description: `سداد لـ${purchase.supplierName} — فاتورة #${no}`,
     lines: [
       { accountCode: ACC.payables, debit: value, memo: purchase.supplierName },
-      { accountCode: ACC.cash, credit: value, memo: "سداد نقدي" },
+      {
+        accountCode: instrumentAccount(options.instrument),
+        credit: value,
+        memo: INSTRUMENT_LABELS[options.instrument || "cash"],
+      },
     ],
   });
 
@@ -633,6 +736,8 @@ export type SaleInput = {
   }[];
   /** خصم إضافي على إجمالي الفاتورة. */
   invoiceDiscount?: number;
+  /** أداة القبض في البيع النقدي؛ افتراضها نقد فلا يتغير سلوك النسخ السابقة. */
+  instrument?: PaymentInstrument;
 };
 
 /**
@@ -784,7 +889,10 @@ export function postSale(state: DbState, input: SaleInput): Sale {
     description: `فاتورة بيع #${no} — ${sale.customer}`,
     lines: [
       {
-        accountCode: terms === "credit" ? ACC.receivables : ACC.cash,
+        accountCode:
+          terms === "credit"
+            ? ACC.receivables
+            : instrumentAccount(input.instrument),
         debit: sale.total,
         memo: sale.customer,
       },
@@ -870,6 +978,8 @@ export type ReturnInput = {
   at?: string;
   reason?: string;
   lines: { productId: number; qty: number }[];
+  /** أداة رد المبلغ في مرتجع البيع النقدي؛ افتراضها نقد. */
+  instrument?: PaymentInstrument;
 };
 
 /** الكميات المرتجعة سابقًا من فاتورة معينة، لمنع تجاوز الكمية الأصلية. */
@@ -999,7 +1109,7 @@ export function postSaleReturn(
         accountCode:
           sale.terms === "credit" && sale.customerId
             ? ACC.receivables
-            : ACC.cash,
+            : instrumentAccount(input.instrument),
         credit: entry.total,
         memo: sale.customer,
       },
@@ -1196,6 +1306,8 @@ export type ExpenseInput = {
   at?: string;
   reference?: string;
   notes?: string;
+  /** أداة الدفع؛ افتراضها نقد كما في النسخ السابقة. */
+  instrument?: PaymentInstrument;
 };
 
 export function addExpense(state: DbState, input: ExpenseInput): Expense {
@@ -1215,6 +1327,7 @@ export function addExpense(state: DbState, input: ExpenseInput): Expense {
     amount,
     reference: (input.reference || "").trim(),
     notes: (input.notes || "").trim(),
+    instrument: input.instrument || "cash",
   };
   state.expenses.unshift(expense);
 
@@ -1230,7 +1343,11 @@ export function addExpense(state: DbState, input: ExpenseInput): Expense {
         debit: expense.amount,
         memo: EXPENSE_LABELS[expense.category],
       },
-      { accountCode: ACC.cash, credit: expense.amount, memo: "دفع نقدي" },
+      {
+        accountCode: instrumentAccount(expense.instrument),
+        credit: expense.amount,
+        memo: INSTRUMENT_LABELS[expense.instrument || "cash"],
+      },
     ],
   });
 
@@ -1661,7 +1778,8 @@ export function collectFromCustomer(
   state: DbState,
   customerId: number,
   amount: number,
-  note = "تحصيل نقدي"
+  note = "تحصيل نقدي",
+  options: { instrument?: PaymentInstrument; reference?: string } = {}
 ): CustomerLedgerEntry {
   const customer = state.customers.find(c => c.id === customerId);
   if (!customer) fail("العميل غير موجود");
@@ -1683,14 +1801,30 @@ export function collectFromCustomer(
   };
   state.customerLedger.push(entry);
 
-  // قيد التحصيل: مدين الصندوق، دائن ذمم العملاء.
+  // سند قبض يثبت التحصيل كمستند مستقل عن القيد.
+  createVoucher(state, {
+    kind: "receipt",
+    party: customer.name,
+    customerId,
+    amount: value,
+    instrument: options.instrument,
+    reference: options.reference,
+    at: entry.at,
+    note,
+  });
+
+  // قيد التحصيل: مدين الصندوق أو البنك حسب الأداة، دائن ذمم العملاء.
   postJournal(state, {
     at: entry.at,
     source: "collection",
     sourceNo: entry.id,
     description: `تحصيل من ${customer.name}`,
     lines: [
-      { accountCode: ACC.cash, debit: value, memo: note },
+      {
+        accountCode: instrumentAccount(options.instrument),
+        debit: value,
+        memo: note,
+      },
       { accountCode: ACC.receivables, credit: value, memo: customer.name },
     ],
   });

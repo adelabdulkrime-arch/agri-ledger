@@ -119,6 +119,43 @@ export type PurchaseLine = {
   expiryDate?: string;
 };
 
+/**
+ * أداة الدفع: كيف انتقل المال فعلًا، لا متى.
+ *
+ * تختلف عن PaymentMethod التي تصف التوقيت (نقدًا الآن أم آجلًا). ما عدا
+ * «نقد» لا يدخل الدرج، فيُرحَّل على حساب البنك؛ وبهذا يبقى جرد الوردية
+ * صادقًا لأن بيع الشبكة لا يزيد ما في الصندوق.
+ */
+export type PaymentInstrument =
+  | "cash"
+  | "bank"
+  | "card"
+  | "transfer"
+  | "cheque";
+
+/** سند قبض أو صرف: مستند مستقل مرقّم لكل حركة نقدية. */
+export type VoucherKind = "receipt" | "payment";
+
+export type Voucher = {
+  no: number;
+  kind: VoucherKind;
+  at: string;
+  /** اسم العميل أو المورد كما ظهر وقت التحرير. */
+  party: string;
+  customerId?: number;
+  supplierId?: number;
+  amount: number;
+  instrument: PaymentInstrument;
+  /** رقم الشيك أو الحوالة إن وُجد. */
+  reference: string;
+  /** المستند المرتبط: فاتورة شراء مثلًا. */
+  refType?: string;
+  refNo?: number;
+  note: string;
+  /** من حرّر السند، من سجل المستخدمين. */
+  issuedBy: string;
+};
+
 export type PaymentMethod = "cash" | "credit" | "partial";
 export type PurchaseStatus = "confirmed" | "void";
 
@@ -235,6 +272,8 @@ export type Expense = {
   /** مرجع اختياري: رقم إيصال أو فاتورة خارجية. */
   reference: string;
   notes: string;
+  /** أداة الدفع؛ غيابها يعني نقدًا كما في النسخ السابقة. */
+  instrument?: PaymentInstrument;
 };
 
 
@@ -474,6 +513,13 @@ export type DbState = {
   batches: Batch[];
   users: User[];
   auditLog: AuditEntry[];
+  /** سندات القبض والصرف؛ اختيارية لأن النسخ القديمة لا تحملها. */
+  vouchers?: Voucher[];
+  /**
+   * مفاتيح حركات البنك التي ظهرت في كشف الحساب، بصيغة "رقم القيد:رقم السطر".
+   * تُحفظ حتى لا يُعاد التأشير في كل مرة تُفتح فيها التسوية.
+   */
+  reconciled?: string[];
   /** معرّف المستخدم النشط في هذا الجهاز. */
   currentUserId?: number;
   /** بيانات المحل؛ اختيارية لأن النسخ القديمة لا تحملها. */

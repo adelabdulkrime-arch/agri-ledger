@@ -2,16 +2,23 @@
 import { useState } from "react";
 import { Check } from "lucide-react";
 import { toast } from "sonner";
-import type { Purchase } from "../data/types";
+import { INSTRUMENT_LABELS } from "../data/operations";
+import type { PaymentInstrument, Purchase } from "../data/types";
 
 type Props = {
   purchase: Purchase;
   money: (v: number) => string;
-  onSubmit: (amount: number) => void;
+  onSubmit: (
+    amount: number,
+    instrument: PaymentInstrument,
+    reference: string
+  ) => void;
 };
 
 export default function PaymentDialog({ purchase, money, onSubmit }: Props) {
   const [amount, setAmount] = useState("");
+  const [instrument, setInstrument] = useState<PaymentInstrument>("cash");
+  const [reference, setReference] = useState("");
   const value = Number(amount) || 0;
   const remaining = Math.max(0, purchase.balance - value);
 
@@ -24,8 +31,16 @@ export default function PaymentDialog({ purchase, money, onSubmit }: Props) {
       toast.error("الدفعة أكبر من المبلغ المتبقي");
       return;
     }
-    onSubmit(value);
+    onSubmit(value, instrument, reference.trim());
   };
+
+  const labelStyle = {
+    fontSize: 11,
+    color: "#7b9388",
+    fontWeight: 700,
+    display: "block",
+    marginBottom: 5,
+  } as const;
 
   return (
     <div className="purchase-dialog">
@@ -45,17 +60,7 @@ export default function PaymentDialog({ purchase, money, onSubmit }: Props) {
       </div>
 
       <label style={{ display: "block", marginTop: 6 }}>
-        <span
-          style={{
-            fontSize: 11,
-            color: "#7b9388",
-            fontWeight: 700,
-            display: "block",
-            marginBottom: 5,
-          }}
-        >
-          قيمة الدفعة
-        </span>
+        <span style={labelStyle}>قيمة الدفعة</span>
         <input
           className="plain-input"
           type="number"
@@ -69,8 +74,40 @@ export default function PaymentDialog({ purchase, money, onSubmit }: Props) {
         />
       </label>
 
+      <label style={{ display: "block", marginTop: 10 }}>
+        <span style={labelStyle}>أداة الدفع</span>
+        <select
+          className="category-select"
+          style={{ width: "100%" }}
+          value={instrument}
+          onChange={e => setInstrument(e.target.value as PaymentInstrument)}
+        >
+          {(
+            Object.keys(INSTRUMENT_LABELS) as PaymentInstrument[]
+          ).map(key => (
+            <option key={key} value={key}>
+              {INSTRUMENT_LABELS[key]}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      {instrument !== "cash" && (
+        <label style={{ display: "block", marginTop: 10 }}>
+          <span style={labelStyle}>رقم الشيك أو الحوالة</span>
+          <input
+            className="plain-input"
+            value={reference}
+            onChange={e => setReference(e.target.value)}
+            placeholder="اختياري"
+          />
+        </label>
+      )}
+
       <div className="search-hint" style={{ marginTop: 8 }}>
-        سيتبقى بعد هذه الدفعة: {money(remaining)}
+        {instrument === "cash"
+          ? `سيتبقى بعد هذه الدفعة: ${money(remaining)}`
+          : `تخرج من حساب البنك لا من الصندوق · المتبقي: ${money(remaining)}`}
       </div>
 
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>

@@ -23,8 +23,10 @@ import {
   FolderOpen,
   HandCoins,
   HelpCircle,
+  Landmark,
   LayoutDashboard,
   Lock,
+  ReceiptText,
   Menu,
   PackagePlus,
   PackageSearch,
@@ -68,6 +70,7 @@ import {
   stockInUnit,
   unitPrice,
   unitsOf,
+  INSTRUMENT_LABELS,
   addExpense,
   collectFromCustomer,
   createCustomer,
@@ -129,10 +132,12 @@ import type {
   PaymentMethod,
   Product,
   Purchase,
+  PaymentInstrument,
   Sale,
   ShopSettings,
   Supplier,
 } from "../data/types";
+import { clearAllUpTo, toggleCleared } from "../data/reconcile";
 const BarcodeScanner = lazy(() => import("../components/BarcodeScanner"));
 const PurchaseDialog = lazy(() => import("../components/PurchaseDialog"));
 import SuppliersBoard from "../components/SuppliersBoard";
@@ -150,6 +155,8 @@ import UsersBoard from "../components/UsersBoard";
 import AgingBoard from "../components/AgingBoard";
 import VatBoard from "../components/VatBoard";
 import SettingsBoard from "../components/SettingsBoard";
+import VouchersBoard from "../components/VouchersBoard";
+import ReconcileBoard from "../components/ReconcileBoard";
 import ProductUnitsDialog from "../components/ProductUnitsDialog";
 import { useUsbScanner } from "../hooks/useUsbScanner";
 import { useInstallPrompt } from "../hooks/useInstallPrompt";
@@ -249,6 +256,8 @@ const menu = [
   { id: "datatools", label: "الجرد والاستيراد", icon: ClipboardList },
   { id: "reports", label: "التقارير", icon: BarChart3 },
   { id: "aging", label: "أعمار الديون", icon: HandCoins },
+  { id: "vouchers", label: "سندات القبض والصرف", icon: ReceiptText },
+  { id: "reconcile", label: "التسوية البنكية", icon: Landmark },
   { id: "vat", label: "الإقرار الضريبي", icon: FileText },
   { id: "users", label: "المستخدمون والتدقيق", icon: UserCog },
 ];
@@ -777,6 +786,9 @@ export default function Home() {
           description: String(fd.get("description") || ""),
           amount: Number(fd.get("amount")),
           reference: String(fd.get("reference") || ""),
+          instrument: String(
+            fd.get("instrument") || "cash"
+          ) as PaymentInstrument,
         }),
       () => {
         setShowExpense(false);
@@ -872,9 +884,17 @@ export default function Home() {
   const submitCollection = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!collecting) return;
-    const amount = Number(new FormData(e.currentTarget).get("amount") || 0);
+    const fd = new FormData(e.currentTarget);
+    const amount = Number(fd.get("amount") || 0);
+    const instrument = String(
+      fd.get("instrument") || "cash"
+    ) as PaymentInstrument;
     runSafe(
-      draft => collectFromCustomer(draft, collecting.id, amount),
+      draft =>
+        collectFromCustomer(draft, collecting.id, amount, "تحصيل", {
+          instrument,
+          reference: String(fd.get("reference") || ""),
+        }),
       () => {
         setCollecting(null);
         toast.success("تم تسجيل التحصيل");
@@ -968,6 +988,17 @@ export default function Home() {
       () => toast.success("تم تسجيل الخروج")
     );
 
+  /** تأشير حركة بنكية بأنها ظهرت في كشف الحساب، أو إلغاء تأشيرها. */
+  const toggleReconciled = (key: string) =>
+    runSafe(draft => toggleCleared(draft, key));
+
+  const clearReconciledUpTo = (to: Date) =>
+    runSafe(
+      draft => clearAllUpTo(draft, to),
+      count =>
+        toast.success(count ? `أُشّرت ${count} حركة` : "كل الحركات مؤشَّرة")
+    );
+
   /** بيانات المحل تُحفظ كما هي؛ تفعيل التسجيل الضريبي يغيّر ترحيل المشتريات لاحقًا. */
   const saveSettings = (patch: ShopSettings) =>
     runSafe(
@@ -1051,10 +1082,18 @@ export default function Home() {
 
   const handlePay = (purchase: Purchase) => setPayingPurchase(purchase);
 
-  const submitPayment = (amount: number) => {
+  const submitPayment = (
+    amount: number,
+    instrument: PaymentInstrument = "cash",
+    reference = ""
+  ) => {
     if (!payingPurchase) return;
     runSafe(
-      draft => payPurchase(draft, payingPurchase.no, amount),
+      draft =>
+        payPurchase(draft, payingPurchase.no, amount, {
+          instrument,
+          reference,
+        }),
       () => {
         setPayingPurchase(null);
         toast.success("تم تسجيل الدفعة وتحديث حساب المورد");
@@ -1549,6 +1588,8 @@ export default function Home() {
             onLoginUser={() => setShowLogin(true)}
             onLogoutUser={doLogout}
             onSaveSettings={saveSettings}
+            onToggleCleared={toggleReconciled}
+            onClearAll={clearReconciledUpTo}
             onCloseSession={() => setShowCloseSession(true)}
             onOpenUnits={(p: Product) => setUnitsProduct(p)}
             onDeleteExpense={removeExpense}
@@ -2094,6 +2135,25 @@ export default function Home() {
               name="amount"
               placeholder="0"
             />
+            <div className="form-grid">
+              <label className="field">
+                <span>أداة القبض</span>
+                <select name="instrument" className="category-select">
+                  {(
+                    Object.keys(INSTRUMENT_LABELS) as PaymentInstrument[]
+                  ).map(key => (
+                    <option key={key} value={key}>
+                      {INSTRUMENT_LABELS[key]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <SupplierField
+                label="المرجع"
+                name="reference"
+                placeholder="رقم الشيك أو الحوالة (اختياري)"
+              />
+            </div>
             <button className="primary-btn full" type="submit">
               <Check size={18} /> تسجيل التحصيل
             </button>
@@ -2128,6 +2188,18 @@ export default function Home() {
                 name="reference"
                 placeholder="رقم الإيصال (اختياري)"
               />
+              <label className="field">
+                <span>أداة الدفع</span>
+                <select name="instrument" className="category-select">
+                  {(
+                    Object.keys(INSTRUMENT_LABELS) as PaymentInstrument[]
+                  ).map(key => (
+                    <option key={key} value={key}>
+                      {INSTRUMENT_LABELS[key]}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
             <button className="primary-btn full" type="submit">
               <Check size={18} /> حفظ المصروف
@@ -2483,6 +2555,8 @@ function ModuleView({
   onLoginUser,
   onLogoutUser,
   onSaveSettings,
+  onToggleCleared,
+  onClearAll,
   onCloseSession,
   onDeleteExpense,
   search,
@@ -2515,6 +2589,14 @@ function ModuleView({
     vat: [
       "الإقرار الضريبي",
       "ضريبة محصَّلة، وأخرى مدفوعة، والفرق المستحق.",
+    ],
+    vouchers: [
+      "سندات القبض والصرف",
+      "مستند مرقّم لكل تحصيل وكل سداد، جاهز للتوقيع.",
+    ],
+    reconcile: [
+      "التسوية البنكية",
+      "أشّر ما ظهر في كشف البنك، ليتبيّن الفرق.",
     ],
     settings: [
       "إعدادات المحل",
@@ -2810,6 +2892,15 @@ function ModuleView({
         <AgingBoard state={state} money={moneyFn} />
       ) : active === "vat" ? (
         <VatBoard state={state} money={moneyFn} />
+      ) : active === "vouchers" ? (
+        <VouchersBoard state={state} money={moneyFn} />
+      ) : active === "reconcile" ? (
+        <ReconcileBoard
+          state={state}
+          money={moneyFn}
+          onToggle={onToggleCleared}
+          onClearAll={onClearAll}
+        />
       ) : active === "settings" ? (
         <SettingsBoard state={state} onSave={onSaveSettings} />
       ) : active === "users" ? (
