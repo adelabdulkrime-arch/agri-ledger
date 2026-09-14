@@ -133,6 +133,47 @@ export type PaymentInstrument =
   | "transfer"
   | "cheque";
 
+/**
+ * مستندات ما قبل البيع؛ لا تمسّ المخزون ولا الدفاتر حتى تتحول لفاتورة.
+ * عرض سعر، أمر بيع، سند تسليم لفاتورة قائمة، وفاتورة معلّقة (سلة محفوظة).
+ */
+export type DraftKind = "quotation" | "order" | "delivery" | "parked";
+
+export type DraftStatus = "open" | "converted" | "cancelled";
+
+export type DraftLine = {
+  productId: number;
+  name: string;
+  /** وحدة البيع المختارة؛ الكميات هنا بها لا بالوحدة الأساسية. */
+  unitName: string;
+  qty: number;
+  price: number;
+  discount: number;
+  tax: number;
+  total: number;
+};
+
+export type Draft = {
+  no: number;
+  kind: DraftKind;
+  at: string;
+  customer: string;
+  customerId?: number;
+  lines: DraftLine[];
+  subtotal: number;
+  /** خصم السطور زائد خصم المستند. */
+  discount: number;
+  tax: number;
+  total: number;
+  status: DraftStatus;
+  note: string;
+  /** رقم فاتورة البيع: مرجع سند التسليم، أو نتيجة التحويل. */
+  saleNo?: number;
+  convertedAt?: string;
+  /** صلاحية عرض السعر؛ بعدها لا يُلزم المحل بسعره. */
+  validUntil?: string;
+};
+
 /** سند قبض أو صرف: مستند مستقل مرقّم لكل حركة نقدية. */
 export type VoucherKind = "receipt" | "payment";
 
@@ -515,6 +556,8 @@ export type DbState = {
   auditLog: AuditEntry[];
   /** سندات القبض والصرف؛ اختيارية لأن النسخ القديمة لا تحملها. */
   vouchers?: Voucher[];
+  /** مستندات ما قبل البيع: عروض، أوامر، سندات تسليم، وفواتير معلّقة. */
+  drafts?: Draft[];
   /**
    * مفاتيح حركات البنك التي ظهرت في كشف الحساب، بصيغة "رقم القيد:رقم السطر".
    * تُحفظ حتى لا يُعاد التأشير في كل مرة تُفتح فيها التسوية.

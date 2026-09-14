@@ -133,11 +133,20 @@ import type {
   Product,
   Purchase,
   PaymentInstrument,
+  Draft,
   Sale,
   ShopSettings,
   Supplier,
 } from "../data/types";
 import { clearAllUpTo, toggleCleared } from "../data/reconcile";
+import {
+  DRAFT_LABELS,
+  cancelDraft,
+  createDraft,
+  draftToSaleInput,
+  markConverted,
+  removeDraft,
+} from "../data/drafts";
 const BarcodeScanner = lazy(() => import("../components/BarcodeScanner"));
 const PurchaseDialog = lazy(() => import("../components/PurchaseDialog"));
 import SuppliersBoard from "../components/SuppliersBoard";
@@ -157,6 +166,7 @@ import VatBoard from "../components/VatBoard";
 import SettingsBoard from "../components/SettingsBoard";
 import VouchersBoard from "../components/VouchersBoard";
 import ReconcileBoard from "../components/ReconcileBoard";
+import DraftsBoard from "../components/DraftsBoard";
 import ProductUnitsDialog from "../components/ProductUnitsDialog";
 import { useUsbScanner } from "../hooks/useUsbScanner";
 import { useInstallPrompt } from "../hooks/useInstallPrompt";
@@ -256,6 +266,7 @@ const menu = [
   { id: "datatools", label: "الجرد والاستيراد", icon: ClipboardList },
   { id: "reports", label: "التقارير", icon: BarChart3 },
   { id: "aging", label: "أعمار الديون", icon: HandCoins },
+  { id: "drafts", label: "العروض والأوامر", icon: ClipboardList },
   { id: "vouchers", label: "سندات القبض والصرف", icon: ReceiptText },
   { id: "reconcile", label: "التسوية البنكية", icon: Landmark },
   { id: "vat", label: "الإقرار الضريبي", icon: FileText },
@@ -988,6 +999,104 @@ export default function Home() {
       () => toast.success("تم تسجيل الخروج")
     );
 
+  /** يحفظ السلة الحالية مستندًا غير مرحَّل: عرض، أمر، أو فاتورة معلّقة. */
+  const saveCartAsDraft = (kind: "quotation" | "order" | "parked") => {
+    if (!cart.length) {
+      toast.error("أضف صنفًا واحدًا على الأقل");
+      return;
+    }
+    runSafe(
+      draft =>
+        createDraft(draft, {
+          kind,
+          customer: saleCustomer,
+          invoiceDiscount: Number(invoiceDiscount || 0),
+          lines: cart.map(line => ({
+            productId: line.id,
+            qty: line.qty,
+            price: unitPrice(line, line.unitName),
+            unitName: line.unitName,
+            discount: line.lineDiscount || 0,
+            tax: line.lineTax || 0,
+          })),
+        }),
+      created => {
+        setShowSale(false);
+        setCart([]);
+        setSaleCustomer("");
+        setInvoiceDiscount("");
+        toast.success(`تم حفظ ${DRAFT_LABELS[kind]} #${created.no}`);
+      }
+    );
+  };
+
+  /**
+   * الفاتورة المعلّقة تعود إلى السلة، وغيرها يتحول إلى فاتورة مباشرة.
+   * التحويل والترحيل في معاملة واحدة، فلا يُعلَّم مستند محوَّلًا دون فاتورة.
+   */
+  const onConvertDraft = (draft: Draft) => {
+    if (draft.kind === "parked") {
+      const restored: CartLine[] = [];
+      draft.lines.forEach(line => {
+        const product = state.products.find(p => p.id === line.productId);
+        if (!product) return;
+        restored.push({
+          ...product,
+          qty: line.qty,
+          unitName: line.unitName,
+          lineDiscount: line.discount,
+          lineTax: line.tax,
+        });
+      });
+      if (!restored.length) {
+        toast.error("أصناف هذه الفاتورة لم تعد موجودة");
+        return;
+      }
+      setCart(restored);
+      setSaleCustomer(draft.customer === "عميل نقدي" ? "" : draft.customer);
+      setInvoiceDiscount(
+        String(draft.discount - draft.lines.reduce((s, l) => s + l.discount, 0))
+      );
+      runSafe(d => removeDraft(d, "parked", draft.no));
+      setActive("sales");
+      setShowSale(true);
+      toast.success(`استُعيدت الفاتورة المعلّقة #${draft.no}`);
+      return;
+    }
+
+    runSafe(
+      d => {
+        const sale = postSale(d, draftToSaleInput(draft));
+        markConverted(d, draft.kind, draft.no, sale.no);
+        return sale;
+      },
+      sale =>
+        toast.success(
+          `تم تحويل ${DRAFT_LABELS[draft.kind]} #${draft.no} إلى فاتورة #${sale.no}`
+        )
+    );
+  };
+
+  const onCancelDraft = (draft: Draft) => {
+    const reason = window.prompt(
+      `سبب إلغاء ${DRAFT_LABELS[draft.kind]} #${draft.no}؟`,
+      ""
+    );
+    if (reason === null) return;
+    runSafe(
+      d => cancelDraft(d, draft.kind, draft.no, reason),
+      () => toast.success("تم إلغاء المستند")
+    );
+  };
+
+  const onRemoveDraft = (draft: Draft) => {
+    if (!window.confirm(`حذف الفاتورة المعلّقة #${draft.no} نهائيًا؟`)) return;
+    runSafe(
+      d => removeDraft(d, draft.kind, draft.no),
+      () => toast.success("تم الحذف")
+    );
+  };
+
   /** تأشير حركة بنكية بأنها ظهرت في كشف الحساب، أو إلغاء تأشيرها. */
   const toggleReconciled = (key: string) =>
     runSafe(draft => toggleCleared(draft, key));
@@ -1590,6 +1699,9 @@ export default function Home() {
             onSaveSettings={saveSettings}
             onToggleCleared={toggleReconciled}
             onClearAll={clearReconciledUpTo}
+            onConvertDraft={onConvertDraft}
+            onCancelDraft={onCancelDraft}
+            onRemoveDraft={onRemoveDraft}
             onCloseSession={() => setShowCloseSession(true)}
             onOpenUnits={(p: Product) => setUnitsProduct(p)}
             onDeleteExpense={removeExpense}
@@ -1814,6 +1926,29 @@ export default function Home() {
               <button className="primary-btn full" onClick={confirmSale}>
                 تأكيد البيع وطباعة الفاتورة <Printer size={18} />
               </button>
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <button
+                  className="outline-btn"
+                  style={{ flex: 1, justifyContent: "center" }}
+                  onClick={() => saveCartAsDraft("parked")}
+                >
+                  تعليق الفاتورة
+                </button>
+                <button
+                  className="outline-btn"
+                  style={{ flex: 1, justifyContent: "center" }}
+                  onClick={() => saveCartAsDraft("quotation")}
+                >
+                  عرض سعر
+                </button>
+                <button
+                  className="outline-btn"
+                  style={{ flex: 1, justifyContent: "center" }}
+                  onClick={() => saveCartAsDraft("order")}
+                >
+                  أمر بيع
+                </button>
+              </div>
             </div>
           </div>
         </Modal>
@@ -2557,6 +2692,9 @@ function ModuleView({
   onSaveSettings,
   onToggleCleared,
   onClearAll,
+  onConvertDraft,
+  onCancelDraft,
+  onRemoveDraft,
   onCloseSession,
   onDeleteExpense,
   search,
@@ -2589,6 +2727,10 @@ function ModuleView({
     vat: [
       "الإقرار الضريبي",
       "ضريبة محصَّلة، وأخرى مدفوعة، والفرق المستحق.",
+    ],
+    drafts: [
+      "العروض والأوامر",
+      "عروض أسعار وأوامر بيع وسندات تسليم وفواتير معلّقة.",
     ],
     vouchers: [
       "سندات القبض والصرف",
@@ -2892,6 +3034,14 @@ function ModuleView({
         <AgingBoard state={state} money={moneyFn} />
       ) : active === "vat" ? (
         <VatBoard state={state} money={moneyFn} />
+      ) : active === "drafts" ? (
+        <DraftsBoard
+          state={state}
+          money={moneyFn}
+          onConvert={onConvertDraft}
+          onCancel={onCancelDraft}
+          onRemove={onRemoveDraft}
+        />
       ) : active === "vouchers" ? (
         <VouchersBoard state={state} money={moneyFn} />
       ) : active === "reconcile" ? (
