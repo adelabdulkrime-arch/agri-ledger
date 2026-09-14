@@ -34,6 +34,8 @@ export type PurchaseDraftLine = {
 type Props = {
   products: Product[];
   suppliers: Supplier[];
+  /** المخازن النشطة؛ الفاتورة تدخل بضاعتها إلى واحد منها. */
+  warehouses?: { id: number; name: string; isDefault: boolean }[];
   money: (v: number) => string;
   onSubmit: (input: {
     supplierId: number;
@@ -42,6 +44,7 @@ type Props = {
     paymentMethod: PaymentMethod;
     paid: number;
     lines: PurchaseDraftLine[];
+    warehouseId?: number;
   }) => void;
   onAddSupplier: () => void;
 };
@@ -49,10 +52,14 @@ type Props = {
 export default function PurchaseDialog({
   products,
   suppliers,
+  warehouses = [],
   money,
   onSubmit,
   onAddSupplier,
 }: Props) {
+  const [warehouseId, setWarehouseId] = useState<number>(
+    warehouses.find(w => w.isDefault)?.id || warehouses[0]?.id || 0
+  );
   const [supplierId, setSupplierId] = useState<number | "">(
     suppliers[0]?.id ?? ""
   );
@@ -151,6 +158,7 @@ export default function PurchaseDialog({
       paymentMethod,
       paid: paymentMethod === "partial" ? Number(paid || 0) : 0,
       lines,
+      warehouseId: warehouseId || undefined,
     });
   };
 

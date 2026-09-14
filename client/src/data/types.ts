@@ -134,6 +134,44 @@ export type PaymentInstrument =
   | "cheque";
 
 /**
+ * مخزن أو فرع: مكان تخزين مستقل برصيده.
+ *
+ * حدٌّ مقصود: التكلفة تبقى متوسطًا مرجحًا واحدًا للصنف في كل المخازن،
+ * وهو العرف المحاسبي. لو اختلفت التكلفة بين مخزن وآخر لولّد التحويل
+ * بينهما ربحًا أو خسارة وهميين من غير بيع.
+ */
+export type Warehouse = {
+  id: number;
+  name: string;
+  /** وصف المكان: فرع، مخزن خلفي، سيارة توزيع. */
+  note: string;
+  /** المخزن الافتراضي الذي تُرحَّل إليه العمليات بلا تحديد. */
+  isDefault: boolean;
+  active: boolean;
+  createdAt: string;
+};
+
+/** تحويل بضاعة بين مخزنين؛ لا يغيّر التكلفة ولا يُنشئ قيدًا. */
+export type Transfer = {
+  no: number;
+  at: string;
+  fromWarehouseId: number;
+  toWarehouseId: number;
+  fromName: string;
+  toName: string;
+  lines: {
+    productId: number;
+    name: string;
+    qty: number;
+    unitCost: number;
+  }[];
+  /** قيمة البضاعة المنقولة بالتكلفة، للعرض لا للترحيل. */
+  total: number;
+  note: string;
+  issuedBy: string;
+};
+
+/**
  * مستندات ما قبل البيع؛ لا تمسّ المخزون ولا الدفاتر حتى تتحول لفاتورة.
  * عرض سعر، أمر بيع، سند تسليم لفاتورة قائمة، وفاتورة معلّقة (سلة محفوظة).
  */
@@ -244,6 +282,8 @@ export type StockMove = {
   refNo: number;
   at: string;
   note: string;
+  /** المخزن الذي جرت فيه الحركة؛ غيابه يعني المخزن الافتراضي. */
+  warehouseId?: number;
 };
 
 export type SupplierLedgerEntry = {
@@ -454,6 +494,8 @@ export type Batch = {
   purchaseNo: number;
   supplierName: string;
   receivedAt: string;
+  /** المخزن الذي تقبع فيه الدفعة؛ غيابه يعني المخزن الافتراضي. */
+  warehouseId?: number;
 };
 
 /** استهلاك دفعة في عملية بيع، لتتبّع من اشترى أي تشغيلة. */
@@ -558,6 +600,10 @@ export type DbState = {
   vouchers?: Voucher[];
   /** مستندات ما قبل البيع: عروض، أوامر، سندات تسليم، وفواتير معلّقة. */
   drafts?: Draft[];
+  /** المخازن والفروع؛ النسخ القديمة تبدأ بمخزن افتراضي واحد. */
+  warehouses?: Warehouse[];
+  /** تحويلات البضاعة بين المخازن. */
+  transfers?: Transfer[];
   /**
    * مفاتيح حركات البنك التي ظهرت في كشف الحساب، بصيغة "رقم القيد:رقم السطر".
    * تُحفظ حتى لا يُعاد التأشير في كل مرة تُفتح فيها التسوية.

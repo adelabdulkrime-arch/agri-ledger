@@ -8,10 +8,27 @@ function fail(message: string): never {
   throw new OperationError(message);
 }
 
-/** دفعات صنف معيّن، مرتبة بالأقرب انتهاءً أولًا. */
-export function batchesOf(state: DbState, productId: number) {
+/**
+ * دفعات صنف معيّن، مرتبة بالأقرب انتهاءً أولًا.
+ *
+ * بتحديد المخزن نصرف من دفعاته وحدها: صرف تشغيلة من فرع لا تملكها
+ * يجعل رصيد الفرعين كذبًا، والتتبّع عند السحب مستحيلًا.
+ */
+export function batchesOf(
+  state: DbState,
+  productId: number,
+  warehouseId?: number
+) {
+  const fallback = (state.warehouses || []).find(
+    w => w.isDefault && w.active
+  )?.id;
   return (state.batches || [])
-    .filter(b => b.productId === productId && b.qtyRemaining > 0)
+    .filter(b => {
+      if (b.productId !== productId || b.qtyRemaining <= 0) return false;
+      if (warehouseId === undefined) return true;
+      // الدفعات القديمة بلا مخزن تخصّ المخزن الافتراضي.
+      return (b.warehouseId ?? fallback) === warehouseId;
+    })
     .sort(byExpiryThenReceived);
 }
 
@@ -44,6 +61,8 @@ export type BatchInput = {
   expiryDate?: string;
   qty: number;
   unitCost: number;
+  /** المخزن الذي وصلت إليه الدفعة. */
+  warehouseId?: number;
   purchaseNo: number;
   supplierName: string;
   at?: string;
@@ -65,12 +84,14 @@ export function createBatch(state: DbState, input: BatchInput): Batch {
     if (Number.isNaN(d.getTime())) fail("تاريخ الصلاحية غير صحيح");
   }
 
-  // نفس الصنف ونفس التشغيلة من نفس الفاتورة يُدمج بدل تكرار سطرين.
+  // نفس الصنف ونفس التشغيلة من نفس الفاتورة يُدمج بدل تكرار سطرين،
+  // بشرط أن يكون في نفس المخزن: التشغيلة الواحدة قد تتوزع على فرعين.
   const existing = (state.batches || []).find(
     b =>
       b.productId === input.productId &&
       b.lotNo === lotNo &&
-      b.purchaseNo === input.purchaseNo
+      b.purchaseNo === input.purchaseNo &&
+      b.warehouseId === input.warehouseId
   );
   if (existing) {
     existing.qtyReceived = round2(existing.qtyReceived + qty);
@@ -90,6 +111,7 @@ export function createBatch(state: DbState, input: BatchInput): Batch {
     purchaseNo: input.purchaseNo,
     supplierName: input.supplierName,
     receivedAt: input.at || new Date().toISOString(),
+    warehouseId: input.warehouseId,
   };
   state.batches.push(batch);
   return batch;
@@ -104,7 +126,8 @@ export function createBatch(state: DbState, input: BatchInput): Batch {
 export function consumeFEFO(
   state: DbState,
   productId: number,
-  qty: number
+  qty: number,
+  warehouseId?: number
 ): BatchConsumption[] {
   const needed = round2(Number(qty));
   if (!Number.isFinite(needed) || needed <= 0) return [];
@@ -112,7 +135,7 @@ export function consumeFEFO(
   const taken: BatchConsumption[] = [];
   let remaining = needed;
 
-  for (const batch of batchesOf(state, productId)) {
+  for (const batch of batchesOf(state, productId, warehouseId)) {
     if (remaining <= 0) break;
     const take = Math.min(batch.qtyRemaining, remaining);
     if (take <= 0) continue;

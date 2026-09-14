@@ -59,6 +59,57 @@ export function instrumentAccount(instrument: PaymentInstrument = "cash") {
 }
 
 /**
+ * المخزن الافتراضي، معرَّفًا هنا لا في warehouses.ts.
+ *
+ * warehouses.ts يستورد recordMove من هذا الملف، فاستيراد العكس يصنع
+ * حلقة. والدالة ثلاثة أسطر على state.warehouses، فتعريفها هنا أبسط من
+ * كسر الحلقة بوسيط يُمرَّر في كل نداء.
+ */
+export function defaultWarehouseId(state: DbState): number | undefined {
+  const list = state.warehouses || [];
+  return (list.find(w => w.isDefault && w.active) || list.find(w => w.active))
+    ?.id;
+}
+
+/**
+ * رصيد صنف في مخزن.
+ *
+ * المخازن غير الافتراضية تُشتقّ من حركاتها وحدها. أما الافتراضي فيأخذ
+ * الباقي: إجمالي الصنف ناقص ما هو موجود في المخازن الأخرى.
+ *
+ * السبب: رصيد قد يُسجَّل دون حركات — بذرة الكتالوج، والاستيراد من ملف،
+ * وكل بيانات النسخ السابقة. لو اشتققنا الافتراضي من الحركات وحدها
+ * لأصبح ذلك الرصيد الحقيقي صفرًا في نظر البيع، فيُمنع بيع بضاعة
+ * موجودة فعلًا على الرف.
+ */
+export function warehouseStock(
+  state: DbState,
+  productId: number,
+  warehouseId: number
+) {
+  const product = state.products.find(p => p.id === productId);
+  if (!product) return 0;
+
+  const movedElsewhere = (state.stockMoves || [])
+    .filter(
+      m =>
+        m.productId === productId &&
+        m.warehouseId !== undefined &&
+        m.warehouseId !== warehouseId
+    )
+    .reduce((sum, m) => sum + m.qty, 0);
+
+  if (warehouseId === defaultWarehouseId(state))
+    return round2(product.stock - movedElsewhere);
+
+  return round2(
+    (state.stockMoves || [])
+      .filter(m => m.productId === productId && m.warehouseId === warehouseId)
+      .reduce((sum, m) => sum + m.qty, 0)
+  );
+}
+
+/**
  * يحرّر سند قبض أو صرف: مستند مرقّم يثبت من دفع ولمن وبأي أداة.
  *
  * السند مستقل عن القيد المحاسبي: القيد يحرّك الحسابات، والسند ورقة
@@ -231,7 +282,14 @@ export function supplierStatement(
 
 // ------------------------------------------------------- حركات المخزون
 
-function recordMove(
+/**
+ * نقطة الكتابة الوحيدة على رصيد الصنف.
+ *
+ * product.stock هو الإجمالي في كل المخازن، وwarehouseId يقيّد الحركة
+ * بمكانها فيُشتق منه رصيد كل مخزن. التحويل بين مخزنين حركتان متعاكستان
+ * فلا يتغير الإجمالي، وهو الصحيح: البضاعة لم تدخل ولم تخرج من المحل.
+ */
+export function recordMove(
   state: DbState,
   move: Omit<StockMove, "id" | "qtyBefore" | "qtyAfter" | "at"> & {
     at?: string;
@@ -257,6 +315,8 @@ function recordMove(
     refNo: move.refNo,
     at: move.at || new Date().toISOString(),
     note: move.note,
+    // غياب المخزن يعني الافتراضي؛ هكذا تبقى الحركات القديمة صحيحة.
+    warehouseId: move.warehouseId,
   };
   state.stockMoves.push(entry);
   return entry;
@@ -302,6 +362,8 @@ export type PurchaseInput = {
   paid?: number;
   /** أداة الدفع؛ افتراضها نقد كما في النسخ السابقة. */
   instrument?: PaymentInstrument;
+  /** المخزن المستقبِل للبضاعة؛ افتراضه المخزن الافتراضي. */
+  warehouseId?: number;
 };
 
 /** يتحقق من المدخلات ويحسب الإجماليات؛ يرمي OperationError عند أي خلل. */
@@ -417,7 +479,7 @@ export function postPurchase(state: DbState, input: PurchaseInput): Purchase {
     status: "confirmed",
   };
 
-  applyPurchaseToInventory(state, purchase);
+  applyPurchaseToInventory(state, purchase, input.warehouseId);
 
   state.purchases.unshift(purchase);
   state.supplierLedger.push({
@@ -508,7 +570,11 @@ function lineCostBase(state: DbState, line: { total: number; tax: number }) {
 }
 
 /** يزيد المخزون ويحدّث متوسط التكلفة لكل بند في الفاتورة. */
-function applyPurchaseToInventory(state: DbState, purchase: Purchase) {
+function applyPurchaseToInventory(
+  state: DbState,
+  purchase: Purchase,
+  warehouseId?: number
+) {
   purchase.lines.forEach(line => {
     const product = state.products.find(p => p.id === line.productId);
     if (!product) fail(`الصنف غير موجود: ${line.name}`);
@@ -536,6 +602,7 @@ function applyPurchaseToInventory(state: DbState, purchase: Purchase) {
         purchaseNo: purchase.no,
         supplierName: purchase.supplierName,
         at: purchase.at,
+        warehouseId: warehouseId ?? defaultWarehouseId(state),
       });
 
     recordMove(state, {
@@ -548,6 +615,7 @@ function applyPurchaseToInventory(state: DbState, purchase: Purchase) {
       refNo: purchase.no,
       at: purchase.at,
       note: `شراء من ${purchase.supplierName}`,
+      warehouseId: warehouseId ?? defaultWarehouseId(state),
     });
   });
 }
@@ -738,6 +806,8 @@ export type SaleInput = {
   invoiceDiscount?: number;
   /** أداة القبض في البيع النقدي؛ افتراضها نقد فلا يتغير سلوك النسخ السابقة. */
   instrument?: PaymentInstrument;
+  /** المخزن الذي تخرج منه البضاعة؛ افتراضه المخزن الافتراضي. */
+  warehouseId?: number;
 };
 
 /**
@@ -750,6 +820,7 @@ export function postSale(state: DbState, input: SaleInput): Sale {
   const at = input.at || new Date().toISOString();
   const no = nextNumber(state.sales, 1048);
   const lines: SaleLine[] = [];
+  const sellingWarehouse = input.warehouseId ?? defaultWarehouseId(state);
 
   // العميل اختياري: البيع النقدي العابر لا يحتاج سجلًا، لكن الآجل يحتاجه
   // ليُقيَّد على حسابه ويظهر في كشف الحساب.
@@ -773,9 +844,14 @@ export function postSale(state: DbState, input: SaleInput): Sale {
     // نحوّل إلى الوحدة الأساسية فورًا: المخزون والتكلفة يُحسبان بها دائمًا.
     const unit = findUnit(product, raw.unitName);
     const baseQty = round2(qty * unit.factor);
-    if (baseQty > product.stock)
+    // الرصيد المعتبر هو رصيد المخزن البائع لا إجمالي المحل: الفرع لا
+    // يبيع ما ليس عنده ولو كان موجودًا في فرع آخر.
+    const available = sellingWarehouse
+      ? warehouseStock(state, product.id, sellingWarehouse)
+      : product.stock;
+    if (baseQty > available)
       fail(
-        `الرصيد المتاح من ${product.name} هو ${stockInUnit(product, unit.name)} ${unit.name}`
+        `الرصيد المتاح من ${product.name} هو ${round2(available / unit.factor)} ${unit.name}`
       );
 
     // السعر المرسل يخص وحدة البيع. نحتفظ به غير مقرَّب لأن التقريب هنا
@@ -809,7 +885,7 @@ export function postSale(state: DbState, input: SaleInput): Sale {
   lines.forEach(line => {
     // الصرف بقاعدة الأقرب انتهاءً أولًا، وتُسجَّل الدفعات في السطر
     // ليمكن تتبّع من اشترى أي تشغيلة عند الحاجة لسحبها.
-    const consumed = consumeFEFO(state, line.id, line.qty);
+    const consumed = consumeFEFO(state, line.id, line.qty, sellingWarehouse);
     if (consumed.length) line.batches = consumed;
 
     recordMove(state, {
@@ -824,6 +900,7 @@ export function postSale(state: DbState, input: SaleInput): Sale {
       note: consumed.length
         ? `بيع · تشغيلة ${consumed.map(c => c.lotNo).join("، ")}`
         : "بيع",
+      warehouseId: sellingWarehouse,
     });
   });
 

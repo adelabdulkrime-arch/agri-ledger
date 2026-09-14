@@ -43,6 +43,7 @@ import {
   Trash2,
   TrendingUp,
   Truck,
+  Warehouse as WarehouseIcon,
   Upload,
   UserRound,
   UserCog,
@@ -137,6 +138,7 @@ import type {
   Sale,
   ShopSettings,
   Supplier,
+  Warehouse,
 } from "../data/types";
 import { clearAllUpTo, toggleCleared } from "../data/reconcile";
 import {
@@ -147,6 +149,11 @@ import {
   markConverted,
   removeDraft,
 } from "../data/drafts";
+import {
+  createWarehouse,
+  transferStock,
+  updateWarehouse,
+} from "../data/warehouses";
 const BarcodeScanner = lazy(() => import("../components/BarcodeScanner"));
 const PurchaseDialog = lazy(() => import("../components/PurchaseDialog"));
 import SuppliersBoard from "../components/SuppliersBoard";
@@ -167,6 +174,7 @@ import SettingsBoard from "../components/SettingsBoard";
 import VouchersBoard from "../components/VouchersBoard";
 import ReconcileBoard from "../components/ReconcileBoard";
 import DraftsBoard from "../components/DraftsBoard";
+import WarehousesBoard from "../components/WarehousesBoard";
 import ProductUnitsDialog from "../components/ProductUnitsDialog";
 import { useUsbScanner } from "../hooks/useUsbScanner";
 import { useInstallPrompt } from "../hooks/useInstallPrompt";
@@ -266,6 +274,7 @@ const menu = [
   { id: "datatools", label: "الجرد والاستيراد", icon: ClipboardList },
   { id: "reports", label: "التقارير", icon: BarChart3 },
   { id: "aging", label: "أعمار الديون", icon: HandCoins },
+  { id: "warehouses", label: "المخازن والفروع", icon: WarehouseIcon },
   { id: "drafts", label: "العروض والأوامر", icon: ClipboardList },
   { id: "vouchers", label: "سندات القبض والصرف", icon: ReceiptText },
   { id: "reconcile", label: "التسوية البنكية", icon: Landmark },
@@ -367,6 +376,12 @@ export default function Home() {
   const [collecting, setCollecting] = useState<Customer | null>(null);
   const [unitsProduct, setUnitsProduct] = useState<Product | null>(null);
   const [payingPurchase, setPayingPurchase] = useState<Purchase | null>(null);
+  const [showWarehouse, setShowWarehouse] = useState(false);
+  const [editingWarehouse, setEditingWarehouse] = useState<Warehouse | null>(
+    null
+  );
+  /** المخزن الذي يبيع منه هذا الجهاز؛ افتراضه الافتراضي. */
+  const [saleWarehouse, setSaleWarehouse] = useState<number>(0);
   const [returning, setReturning] = useState<{
     kind: ReturnKind;
     source: Sale | Purchase;
@@ -727,6 +742,7 @@ export default function Home() {
       draft =>
         postSale(draft, {
           customer: saleCustomer,
+          warehouseId: saleWarehouse || undefined,
           invoiceDiscount: Number(invoiceDiscount || 0),
           lines: cart.map(line => ({
             productId: line.id,
@@ -997,6 +1013,50 @@ export default function Home() {
     runSafe(
       draft => logout(draft),
       () => toast.success("تم تسجيل الخروج")
+    );
+
+  const submitWarehouse = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    const payload = {
+      name: String(fd.get("name") || ""),
+      note: String(fd.get("note") || ""),
+      isDefault: fd.get("isDefault") === "on",
+    };
+    const target = editingWarehouse;
+    runSafe(
+      draft =>
+        target
+          ? updateWarehouse(draft, target.id, payload)
+          : createWarehouse(draft, payload),
+      () => {
+        setShowWarehouse(false);
+        setEditingWarehouse(null);
+        toast.success(target ? "تم تعديل المخزن" : "تمت إضافة المخزن");
+      }
+    );
+  };
+
+  const onAddWarehouse = () => {
+    setEditingWarehouse(null);
+    setShowWarehouse(true);
+  };
+
+  const onEditWarehouse = (w: Warehouse) => {
+    setEditingWarehouse(w);
+    setShowWarehouse(true);
+  };
+
+  /** التحويل حركتان متعاكستان؛ لا قيد محاسبي لأن الملكية لم تتغير. */
+  const onTransferStock = (input: {
+    fromWarehouseId: number;
+    toWarehouseId: number;
+    lines: { productId: number; qty: number }[];
+    note: string;
+  }) =>
+    runSafe(
+      draft => transferStock(draft, input),
+      t => toast.success(`تم التحويل #${t.no} إلى ${t.toName}`)
     );
 
   /** يحفظ السلة الحالية مستندًا غير مرحَّل: عرض، أمر، أو فاتورة معلّقة. */
@@ -1702,6 +1762,9 @@ export default function Home() {
             onConvertDraft={onConvertDraft}
             onCancelDraft={onCancelDraft}
             onRemoveDraft={onRemoveDraft}
+            onAddWarehouse={onAddWarehouse}
+            onEditWarehouse={onEditWarehouse}
+            onTransferStock={onTransferStock}
             onCloseSession={() => setShowCloseSession(true)}
             onOpenUnits={(p: Product) => setUnitsProduct(p)}
             onDeleteExpense={removeExpense}
@@ -1923,6 +1986,22 @@ export default function Home() {
                 onChange={e => setSaleCustomer(e.target.value)}
                 placeholder="اسم العميل (اختياري)"
               />
+              {(state.warehouses || []).filter(w => w.active).length > 1 && (
+                <select
+                  className="customer-input"
+                  value={saleWarehouse}
+                  onChange={e => setSaleWarehouse(Number(e.target.value))}
+                >
+                  <option value={0}>المخزن الافتراضي</option>
+                  {(state.warehouses || [])
+                    .filter(w => w.active)
+                    .map(w => (
+                      <option key={w.id} value={w.id}>
+                        البيع من {w.name}
+                      </option>
+                    ))}
+                </select>
+              )}
               <button className="primary-btn full" onClick={confirmSale}>
                 تأكيد البيع وطباعة الفاتورة <Printer size={18} />
               </button>
@@ -2035,6 +2114,50 @@ export default function Home() {
             onAddBarcode={productUnitActions.addBarcode}
             onRemoveBarcode={productUnitActions.removeBarcode}
           />
+        </Modal>
+      )}
+      {showWarehouse && (
+        <Modal
+          title={editingWarehouse ? "تعديل مخزن" : "مخزن جديد"}
+          onClose={() => {
+            setShowWarehouse(false);
+            setEditingWarehouse(null);
+          }}
+        >
+          <form className="product-form" onSubmit={submitWarehouse}>
+            <SupplierField
+              label="الاسم"
+              name="name"
+              value={editingWarehouse?.name}
+              placeholder="الفرع الثاني"
+            />
+            <SupplierField
+              label="الوصف"
+              name="note"
+              value={editingWarehouse?.note}
+              placeholder="اختياري: مخزن خلفي، سيارة توزيع…"
+            />
+            <label
+              className="field"
+              style={{ flexDirection: "row", alignItems: "center", gap: 10 }}
+            >
+              <input
+                type="checkbox"
+                name="isDefault"
+                defaultChecked={editingWarehouse?.isDefault}
+                style={{ width: 18, height: 18 }}
+              />
+              <span>المخزن الافتراضي للعمليات</span>
+            </label>
+            <div className="search-hint">
+              تحويل البضاعة بين المخازن لا يُنشئ قيدًا محاسبيًا، فالملكية
+              والتكلفة لم تتغيرا.
+            </div>
+            <button className="primary-btn full" type="submit">
+              <Check size={18} />{" "}
+              {editingWarehouse ? "حفظ التعديل" : "حفظ المخزن"}
+            </button>
+          </form>
         </Modal>
       )}
       {showUser && (
@@ -2379,6 +2502,7 @@ export default function Home() {
             <PurchaseDialog
               products={products}
               suppliers={suppliers.filter(x => x.status === "active")}
+              warehouses={(state.warehouses || []).filter(w => w.active)}
               money={money}
               onSubmit={submitPurchase}
               onAddSupplier={() => {
@@ -2695,6 +2819,9 @@ function ModuleView({
   onConvertDraft,
   onCancelDraft,
   onRemoveDraft,
+  onAddWarehouse,
+  onEditWarehouse,
+  onTransferStock,
   onCloseSession,
   onDeleteExpense,
   search,
@@ -2727,6 +2854,10 @@ function ModuleView({
     vat: [
       "الإقرار الضريبي",
       "ضريبة محصَّلة، وأخرى مدفوعة، والفرق المستحق.",
+    ],
+    warehouses: [
+      "المخازن والفروع",
+      "رصيد كل مكان على حدة، والتحويل بينها.",
     ],
     drafts: [
       "العروض والأوامر",
@@ -3034,6 +3165,14 @@ function ModuleView({
         <AgingBoard state={state} money={moneyFn} />
       ) : active === "vat" ? (
         <VatBoard state={state} money={moneyFn} />
+      ) : active === "warehouses" ? (
+        <WarehousesBoard
+          state={state}
+          money={moneyFn}
+          onAdd={onAddWarehouse}
+          onEdit={onEditWarehouse}
+          onTransfer={onTransferStock}
+        />
       ) : active === "drafts" ? (
         <DraftsBoard
           state={state}

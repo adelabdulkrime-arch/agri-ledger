@@ -3,7 +3,7 @@
 import type { DbState, Product } from "./types";
 
 export const DB_KEY = "agri-db";
-export const SCHEMA_VERSION = 18;
+export const SCHEMA_VERSION = 19;
 
 /** المفاتيح القديمة قبل توحيد التخزين؛ نقرأ منها مرة واحدة ثم نتركها كنسخة أمان. */
 const LEGACY_PRODUCTS = "agri-products";
@@ -32,6 +32,17 @@ export function emptyState(): DbState {
     vouchers: [],
     reconciled: [],
     drafts: [],
+    warehouses: [
+      {
+        id: 1,
+        name: "المخزن الرئيسي",
+        note: "",
+        isDefault: true,
+        active: true,
+        createdAt: new Date().toISOString(),
+      },
+    ],
+    transfers: [],
     settings: {
       name: "",
       tradeName: "",
@@ -238,6 +249,25 @@ export function migrate(input: any): DbState {
   if (version < 18) {
     state.drafts = state.drafts || [];
     version = 18;
+  }
+
+  // 18 -> 19: المخازن والفروع.
+  // كل ما هو موجود الآن يخص مخزنًا افتراضيًا واحدًا، فلا يصبح رصيد
+  // قائم بلا مكان. الحركات القديمة تبقى بلا warehouseId وتُقرأ على أنها
+  // في المخزن الافتراضي، فلا نعيد كتابة تاريخ لم يُسجَّل بمخزن أصلًا.
+  if (version < 19) {
+    state.warehouses = state.warehouses || [];
+    if (!state.warehouses.length)
+      state.warehouses.push({
+        id: 1,
+        name: "المخزن الرئيسي",
+        note: "أُنشئ تلقائيًا عند الترقية",
+        isDefault: true,
+        active: true,
+        createdAt: new Date().toISOString(),
+      });
+    state.transfers = state.transfers || [];
+    version = 19;
   }
 
   state.version = version;
