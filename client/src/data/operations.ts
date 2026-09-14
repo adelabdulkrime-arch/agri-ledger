@@ -22,6 +22,7 @@ import type {
   ProductUnit,
 } from "./types";
 import { nextId, nextNumber } from "./store";
+import { ACC, postJournal, reverseJournal } from "./ledger";
 
 /** خطأ عمل معروف؛ رسالته عربية جاهزة للعرض للمستخدم. */
 export class OperationError extends Error {}
@@ -352,6 +353,41 @@ export function postPurchase(state: DbState, input: PurchaseInput): Purchase {
     });
   }
 
+  // قيد الشراء: المخزون مدين بالكامل، والدائن موزّع بين ما دُفع نقدًا
+  // وما بقي في ذمة المورد.
+  const credited: {
+    accountCode: string;
+    debit?: number;
+    credit?: number;
+    memo?: string;
+  }[] = [
+    {
+      accountCode: ACC.inventory,
+      debit: purchase.total,
+      memo: "بضاعة واردة",
+    },
+  ];
+  if (purchase.paid > 0)
+    credited.push({
+      accountCode: ACC.cash,
+      credit: purchase.paid,
+      memo: "سداد نقدي",
+    });
+  if (purchase.balance > 0)
+    credited.push({
+      accountCode: ACC.payables,
+      credit: purchase.balance,
+      memo: purchase.supplierName,
+    });
+
+  postJournal(state, {
+    at,
+    source: "purchase",
+    sourceNo: no,
+    description: `فاتورة شراء #${no} — ${purchase.supplierName}`,
+    lines: credited,
+  });
+
   return purchase;
 }
 
@@ -446,6 +482,18 @@ export function voidPurchase(state: DbState, no: number): Purchase {
     });
   }
 
+  // الإلغاء يعكس قيود الفاتورة الأصلية، فلا تُحذف من الدفتر أبدًا.
+  state.journal
+    .filter(
+      j =>
+        j.source === "purchase" &&
+        j.sourceNo === purchase.no &&
+        !j.reversedBy
+    )
+    // نسخة ثابتة لأن العكس يضيف قيودًا جديدة أثناء المرور.
+    .slice()
+    .forEach(j => reverseJournal(state, j.no, "إلغاء فاتورة شراء"));
+
   return purchase;
 }
 
@@ -503,6 +551,18 @@ export function payPurchase(
     credit: 0,
     note: `سداد على فاتورة #${no}`,
   });
+
+  // قيد السداد: ينقص ما علينا للمورد وينقص الصندوق.
+  postJournal(state, {
+    source: "payment",
+    sourceNo: no,
+    description: `سداد لـ${purchase.supplierName} — فاتورة #${no}`,
+    lines: [
+      { accountCode: ACC.payables, debit: value, memo: purchase.supplierName },
+      { accountCode: ACC.cash, credit: value, memo: "سداد نقدي" },
+    ],
+  });
+
   return purchase;
 }
 
@@ -624,6 +684,37 @@ export function postSale(state: DbState, input: SaleInput): Sale {
       note: "بيع آجل",
     });
   }
+
+  // قيدا البيع: الإيراد ثم التكلفة.
+  // الآجل يُحمَّل على ذمم العملاء، والنقدي على الصندوق.
+  postJournal(state, {
+    at,
+    source: "sale",
+    sourceNo: no,
+    description: `فاتورة بيع #${no} — ${sale.customer}`,
+    lines: [
+      {
+        accountCode:
+          terms === "credit" ? ACC.receivables : ACC.cash,
+        debit: sale.total,
+        memo: sale.customer,
+      },
+      { accountCode: ACC.sales, credit: sale.total, memo: "مبيعات" },
+    ],
+  });
+
+  // تكلفة البضاعة المباعة تخرج من المخزون إلى المصروف.
+  if (sale.cogs > 0)
+    postJournal(state, {
+      at,
+      source: "sale",
+      sourceNo: no,
+      description: `تكلفة المبيع — فاتورة #${no}`,
+      lines: [
+        { accountCode: ACC.cogs, debit: sale.cogs, memo: "تكلفة المبيع" },
+        { accountCode: ACC.inventory, credit: sale.cogs, memo: "خروج مخزون" },
+      ],
+    });
 
   return sale;
 }
@@ -775,6 +866,42 @@ export function postSaleReturn(
     });
   }
 
+  // قيد المرتجع: مردودات المبيعات مدينة، ويُرد المقابل للعميل أو الصندوق.
+  postJournal(state, {
+    at,
+    source: "sale_return",
+    sourceNo: sale.no,
+    description: `مرتجع بيع من فاتورة #${sale.no}`,
+    lines: [
+      {
+        accountCode: ACC.salesReturns,
+        debit: entry.total,
+        memo: "مردودات مبيعات",
+      },
+      {
+        accountCode:
+          sale.terms === "credit" && sale.customerId
+            ? ACC.receivables
+            : ACC.cash,
+        credit: entry.total,
+        memo: sale.customer,
+      },
+    ],
+  });
+
+  // البضاعة تعود للمخزون بتكلفتها الأصلية، فتُعكس تكلفة المبيع.
+  if (entry.cogs > 0)
+    postJournal(state, {
+      at,
+      source: "sale_return",
+      sourceNo: sale.no,
+      description: `إعادة تكلفة مرتجع #${sale.no}`,
+      lines: [
+        { accountCode: ACC.inventory, debit: entry.cogs, memo: "بضاعة عائدة" },
+        { accountCode: ACC.cogs, credit: entry.cogs, memo: "عكس التكلفة" },
+      ],
+    });
+
   return entry;
 }
 
@@ -869,6 +996,18 @@ export function postPurchaseReturn(
   purchase.total = round2(purchase.total - total);
   purchase.balance = round2(Math.max(0, purchase.total - purchase.paid));
 
+  // قيد مرتجع الشراء: يخرج المخزون ويقل الالتزام تجاه المورد.
+  postJournal(state, {
+    at,
+    source: "purchase_return",
+    sourceNo: purchase.no,
+    description: `مرتجع شراء إلى ${purchase.supplierName}`,
+    lines: [
+      { accountCode: ACC.payables, debit: total, memo: purchase.supplierName },
+      { accountCode: ACC.inventory, credit: total, memo: "بضاعة مرتجعة" },
+    ],
+  });
+
   return entry;
 }
 
@@ -936,6 +1075,23 @@ export function addExpense(state: DbState, input: ExpenseInput): Expense {
     notes: (input.notes || "").trim(),
   };
   state.expenses.unshift(expense);
+
+  // قيد المصروف: مدين المصروفات، دائن الصندوق.
+  postJournal(state, {
+    at: expense.at,
+    source: "expense",
+    sourceNo: expense.id,
+    description: `مصروف: ${expense.description}`,
+    lines: [
+      {
+        accountCode: ACC.expenses,
+        debit: expense.amount,
+        memo: EXPENSE_LABELS[expense.category],
+      },
+      { accountCode: ACC.cash, credit: expense.amount, memo: "دفع نقدي" },
+    ],
+  });
+
   return expense;
 }
 
@@ -1384,6 +1540,19 @@ export function collectFromCustomer(
     note,
   };
   state.customerLedger.push(entry);
+
+  // قيد التحصيل: مدين الصندوق، دائن ذمم العملاء.
+  postJournal(state, {
+    at: entry.at,
+    source: "collection",
+    sourceNo: entry.id,
+    description: `تحصيل من ${customer.name}`,
+    lines: [
+      { accountCode: ACC.cash, debit: value, memo: note },
+      { accountCode: ACC.receivables, credit: value, memo: customer.name },
+    ],
+  });
+
   return entry;
 }
 
@@ -1462,6 +1631,40 @@ export function postStockTake(
       })
     );
   });
+
+  // فرق الجرد يُقيَّد: الزيادة تدخل المخزون، والعجز يُحمَّل مصروفًا.
+  const delta = round2(
+    moves.reduce((sum, m) => sum + m.qty * m.unitCost, 0)
+  );
+  if (Math.abs(delta) > 0.01)
+    postJournal(state, {
+      at,
+      source: "stocktake",
+      sourceNo: refNo,
+      description: note,
+      lines:
+        delta > 0
+          ? [
+              { accountCode: ACC.inventory, debit: delta, memo: "زيادة جرد" },
+              {
+                accountCode: ACC.inventoryAdjust,
+                credit: delta,
+                memo: "تسوية",
+              },
+            ]
+          : [
+              {
+                accountCode: ACC.inventoryAdjust,
+                debit: Math.abs(delta),
+                memo: "عجز جرد",
+              },
+              {
+                accountCode: ACC.inventory,
+                credit: Math.abs(delta),
+                memo: "تسوية",
+              },
+            ],
+    });
 
   return moves;
 }

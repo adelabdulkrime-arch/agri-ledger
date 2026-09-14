@@ -69,7 +69,11 @@ export function defaultChart(): Account[] {
 
     a("4000", "الإيرادات", "revenue"),
     a(ACC.sales, "المبيعات", "revenue", "4000"),
-    a(ACC.salesReturns, "مردودات المبيعات", "revenue", "4000"),
+    // مردودات المبيعات حساب مقابل للإيراد: طبيعته مدينة رغم تصنيفه إيرادًا.
+    {
+      ...a(ACC.salesReturns, "مردودات المبيعات", "revenue", "4000"),
+      normalSide: "debit" as const,
+    },
 
     a("5000", "المصروفات", "expense"),
     a(ACC.cogs, "تكلفة البضاعة المباعة", "expense", "5000"),
