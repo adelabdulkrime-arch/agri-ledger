@@ -55,6 +55,12 @@ export type SaleLine = {
   soldUnit?: string;
   /** الكمية بوحدة البيع المختارة؛ 2 كرتون بدل 24 عبوة. */
   soldQty?: number;
+  /** خصم على مستوى السطر بالقيمة لا بالنسبة. */
+  discount: number;
+  /** ضريبة السطر بالقيمة؛ صفر عندما لا يستخدم المحل الضريبة. */
+  tax: number;
+  /** صافي السطر بعد الخصم والضريبة. */
+  total: number;
 };
 
 export type Sale = {
@@ -67,6 +73,12 @@ export type Sale = {
   /** نقدي يُحصَّل فورًا، وآجل يُقيَّد على حساب العميل. */
   terms?: PartyTerms;
   lines: SaleLine[];
+  /** إجمالي السطور قبل الخصم والضريبة. */
+  subtotal: number;
+  /** مجموع الخصومات: خصم السطور زائد خصم الفاتورة. */
+  discount: number;
+  /** مجموع الضريبة على السطور. */
+  tax: number;
   total: number;
   /** تكلفة البضاعة المباعة لهذه الفاتورة. */
   cogs: number;

@@ -580,7 +580,13 @@ export type SaleInput = {
     price: number;
     /** وحدة البيع المختارة؛ تُترك فارغة للوحدة الأساسية. */
     unitName?: string;
+    /** خصم السطر بالقيمة. */
+    discount?: number;
+    /** ضريبة السطر بالقيمة. */
+    tax?: number;
   }[];
+  /** خصم إضافي على إجمالي الفاتورة. */
+  invoiceDiscount?: number;
 };
 
 /**
@@ -625,6 +631,15 @@ export function postSale(state: DbState, input: SaleInput): Sale {
     // يضيع كسورًا تظهر في الإجمالي (110 ÷ 12 مثلًا).
     const linePrice = Number(raw.price) / unit.factor;
 
+    const lineDiscount = round2(Number(raw.discount || 0));
+    const lineTax = round2(Number(raw.tax || 0));
+    if (lineDiscount < 0 || lineTax < 0)
+      fail(`الخصم والضريبة لا يصح أن تكون سالبة: ${product.name}`);
+
+    const gross = round2(linePrice * baseQty);
+    if (lineDiscount > gross)
+      fail(`الخصم أكبر من قيمة الصنف: ${product.name}`);
+
     lines.push({
       id: product.id,
       name: product.name,
@@ -634,6 +649,9 @@ export function postSale(state: DbState, input: SaleInput): Sale {
       unitCost: product.avgCost,
       soldUnit: unit.factor === 1 ? undefined : unit.name,
       soldQty: unit.factor === 1 ? undefined : qty,
+      discount: lineDiscount,
+      tax: lineTax,
+      total: round2(gross - lineDiscount + lineTax),
     });
   });
 
@@ -651,6 +669,22 @@ export function postSale(state: DbState, input: SaleInput): Sale {
     });
   });
 
+  const subtotal = round2(
+    lines.reduce((sum, l) => sum + l.price * l.qty, 0)
+  );
+  const lineDiscounts = round2(lines.reduce((sum, l) => sum + l.discount, 0));
+  const taxTotal = round2(lines.reduce((sum, l) => sum + l.tax, 0));
+
+  // خصم الفاتورة يُضاف فوق خصومات السطور، ولا يصح أن يتجاوز الصافي.
+  const invoiceDiscount = round2(Number(input.invoiceDiscount || 0));
+  if (invoiceDiscount < 0) fail("خصم الفاتورة لا يصح أن يكون سالبًا");
+  const afterLines = round2(subtotal - lineDiscounts);
+  if (invoiceDiscount > afterLines)
+    fail("خصم الفاتورة أكبر من قيمتها");
+
+  const discount = round2(lineDiscounts + invoiceDiscount);
+  const total = round2(subtotal - discount + taxTotal);
+
   const sale: Sale = {
     no,
     at,
@@ -658,7 +692,10 @@ export function postSale(state: DbState, input: SaleInput): Sale {
     customerId: customerRecord?.id,
     terms,
     lines,
-    total: round2(lines.reduce((sum, l) => sum + l.price * l.qty, 0)),
+    subtotal,
+    discount,
+    tax: taxTotal,
+    total,
     cogs: round2(lines.reduce((sum, l) => sum + l.unitCost * l.qty, 0)),
   };
   state.sales.unshift(sale);
@@ -694,12 +731,25 @@ export function postSale(state: DbState, input: SaleInput): Sale {
     description: `فاتورة بيع #${no} — ${sale.customer}`,
     lines: [
       {
-        accountCode:
-          terms === "credit" ? ACC.receivables : ACC.cash,
+        accountCode: terms === "credit" ? ACC.receivables : ACC.cash,
         debit: sale.total,
         memo: sale.customer,
       },
-      { accountCode: ACC.sales, credit: sale.total, memo: "مبيعات" },
+      {
+        accountCode: ACC.sales,
+        credit: round2(sale.total - sale.tax),
+        memo: "مبيعات",
+      },
+      // الضريبة المحصَّلة التزام على المحل لا إيرادًا له.
+      ...(sale.tax > 0
+        ? [
+            {
+              accountCode: ACC.vatPayable,
+              credit: sale.tax,
+              memo: "ضريبة مستحقة",
+            },
+          ]
+        : []),
     ],
   });
 
@@ -790,6 +840,16 @@ export function returnedQuantities(
  * مرتجع بيع: البضاعة تعود للمخزن، ونعكس تكلفتها من COGS.
  * نستخدم نفس تكلفة الوحدة المثبتة في الفاتورة الأصلية حتى يبقى الربح صحيحًا.
  */
+/**
+ * سعر الوحدة الصافي في سطر بيع: بعد الخصم والضريبة.
+ * الفواتير السابقة للإصدار 11 لا تحمل total، فنرجع لسعرها الأصلي.
+ */
+function netUnitPrice(line: SaleLine) {
+  if (!line.qty) return 0;
+  const net = typeof line.total === "number" ? line.total : line.price * line.qty;
+  return round2(net / line.qty);
+}
+
 export function postSaleReturn(
   state: DbState,
   input: ReturnInput
@@ -818,10 +878,10 @@ export function postSaleReturn(
       name: original.name,
       unit: original.unit,
       qty,
-      unitPrice: original.price,
+      unitPrice: netUnitPrice(original),
       // التكلفة من الفاتورة الأصلية، لا من متوسط اليوم.
       unitCost: original.unitCost || 0,
-      total: round2(qty * original.price),
+      total: round2(qty * netUnitPrice(original)),
     };
   });
 

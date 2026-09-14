@@ -3,7 +3,7 @@
 import type { DbState, Product } from "./types";
 
 export const DB_KEY = "agri-db";
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 /** المفاتيح القديمة قبل توحيد التخزين؛ نقرأ منها مرة واحدة ثم نتركها كنسخة أمان. */
 const LEGACY_PRODUCTS = "agri-products";
@@ -141,6 +141,31 @@ export function migrate(input: any): DbState {
     state.journal = state.journal || [];
     state.closedPeriods = state.closedPeriods || [];
     version = 10;
+  }
+
+  // 10 -> 11: خصم وضريبة على فاتورة البيع.
+  // الفواتير السابقة بلا خصم ولا ضريبة، فإجماليها يبقى كما هو.
+  if (version < 11) {
+    state.sales = (state.sales || []).map((sale: any) => {
+      const lines = (sale.lines || []).map((l: any) => ({
+        ...l,
+        discount: toNumber(l.discount, 0),
+        tax: toNumber(l.tax, 0),
+        total: toNumber(l.total, toNumber(l.price) * toNumber(l.qty)),
+      }));
+      const subtotal = lines.reduce(
+        (s: number, l: any) => s + toNumber(l.price) * toNumber(l.qty),
+        0
+      );
+      return {
+        ...sale,
+        lines,
+        subtotal: toNumber(sale.subtotal, subtotal),
+        discount: toNumber(sale.discount, 0),
+        tax: toNumber(sale.tax, 0),
+      };
+    });
+    version = 11;
   }
 
   state.version = version;

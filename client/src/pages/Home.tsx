@@ -140,6 +140,10 @@ type CartLine = Product & {
   qty: number;
   /** اسم وحدة البيع؛ الوحدة الأساسية عند عدم الاختيار. */
   unitName: string;
+  /** خصم السطر بالقيمة. */
+  lineDiscount: number;
+  /** ضريبة السطر بالقيمة. */
+  lineTax: number;
 };
 
 const seedProducts: Product[] = [
@@ -297,6 +301,7 @@ export default function Home() {
   const [invoicePhoto, setInvoicePhoto] = useState<string | null>(null);
   const [cart, setCart] = useState<CartLine[]>([]);
   const [saleCustomer, setSaleCustomer] = useState("");
+  const [invoiceDiscount, setInvoiceDiscount] = useState("");
   const [showPurchase, setShowPurchase] = useState(false);
   const [showSupplier, setShowSupplier] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
@@ -583,7 +588,10 @@ export default function Home() {
         toast.error(`لا يوجد رصيد كافٍ من ${p.name} بوحدة ${chosen}`);
         return prev;
       }
-      return [...prev, { ...p, qty: 1, unitName: chosen }];
+      return [
+        ...prev,
+        { ...p, qty: 1, unitName: chosen, lineDiscount: 0, lineTax: 0 },
+      ];
     });
     toast.success(`أضيف ${p.name} إلى الفاتورة`);
   };
@@ -604,6 +612,40 @@ export default function Home() {
           qty: Math.min(item.qty, Math.floor(available)) || 1,
         };
       })
+    );
+
+  /** إجماليات السلة بنفس منطق postSale، فيتطابق المعروض مع المحفوظ. */
+  const cartTotals = useMemo(() => {
+    const subtotal = round2(
+      cart.reduce((a, l) => a + unitPrice(l, l.unitName) * l.qty, 0)
+    );
+    const lineDiscounts = round2(
+      cart.reduce((a, l) => a + (l.lineDiscount || 0), 0)
+    );
+    const tax = round2(cart.reduce((a, l) => a + (l.lineTax || 0), 0));
+    const invoice = round2(Number(invoiceDiscount || 0));
+    return {
+      subtotal,
+      lineDiscounts,
+      tax,
+      invoice,
+      total: round2(subtotal - lineDiscounts - invoice + tax),
+    };
+  }, [cart, invoiceDiscount]);
+
+  /** تعديل خصم أو ضريبة سطر في السلة. */
+  const setLineExtra = (
+    id: number,
+    unitName: string,
+    field: "lineDiscount" | "lineTax",
+    value: number
+  ) =>
+    setCart(prev =>
+      prev.map(line =>
+        line.id === id && line.unitName === unitName
+          ? { ...line, [field]: Number.isFinite(value) && value >= 0 ? value : 0 }
+          : line
+      )
     );
 
   const changeQty = (id: number, unitName: string, delta: number) =>
@@ -632,11 +674,14 @@ export default function Home() {
       draft =>
         postSale(draft, {
           customer: saleCustomer,
+          invoiceDiscount: Number(invoiceDiscount || 0),
           lines: cart.map(line => ({
             productId: line.id,
             qty: line.qty,
             price: unitPrice(line, line.unitName),
             unitName: line.unitName,
+            discount: line.lineDiscount || 0,
+            tax: line.lineTax || 0,
           })),
         }),
       sale => {
@@ -644,6 +689,7 @@ export default function Home() {
         setShowSale(false);
         setCart([]);
         setSaleCustomer("");
+        setInvoiceDiscount("");
         toast.success(
           `تم حفظ الفاتورة #${sale.no} وخصم الكميات من المخزون`
         );
@@ -1469,8 +1515,54 @@ export default function Home() {
                             +
                           </button>
                         </span>
+                        <span className="line-extras">
+                          <label>
+                            خصم
+                            <input
+                              type="number"
+                              min={0}
+                              step="any"
+                              value={line.lineDiscount || ""}
+                              placeholder="0"
+                              onChange={e =>
+                                setLineExtra(
+                                  line.id,
+                                  line.unitName,
+                                  "lineDiscount",
+                                  Number(e.target.value)
+                                )
+                              }
+                            />
+                          </label>
+                          <label>
+                            ضريبة
+                            <input
+                              type="number"
+                              min={0}
+                              step="any"
+                              value={line.lineTax || ""}
+                              placeholder="0"
+                              onChange={e =>
+                                setLineExtra(
+                                  line.id,
+                                  line.unitName,
+                                  "lineTax",
+                                  Number(e.target.value)
+                                )
+                              }
+                            />
+                          </label>
+                        </span>
                       </span>
-                      <strong>{money(each * line.qty)}</strong>
+                      <strong>
+                        {money(
+                          round2(
+                            each * line.qty -
+                              (line.lineDiscount || 0) +
+                              (line.lineTax || 0)
+                          )
+                        )}
+                      </strong>
                     </div>
                   );
                 })
@@ -1480,16 +1572,38 @@ export default function Home() {
                   <span>اختر صنفًا لإضافته</span>
                 </div>
               )}
-              <div className="cart-total">
-                <span>الإجمالي</span>
-                <strong>
-                  {money(
-                    cart.reduce(
-                      (a, line) => a + unitPrice(line, line.unitName) * line.qty,
-                      0
-                    )
-                  )}
-                </strong>
+              <div className="cart-summary">
+                <div>
+                  <span>الإجمالي قبل الخصم</span>
+                  <b>{money(cartTotals.subtotal)}</b>
+                </div>
+                {cartTotals.lineDiscounts > 0 && (
+                  <div>
+                    <span>خصم السطور</span>
+                    <b>({money(cartTotals.lineDiscounts)})</b>
+                  </div>
+                )}
+                <div className="cart-discount-row">
+                  <span>خصم الفاتورة</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step="any"
+                    value={invoiceDiscount}
+                    placeholder="0"
+                    onChange={e => setInvoiceDiscount(e.target.value)}
+                  />
+                </div>
+                {cartTotals.tax > 0 && (
+                  <div>
+                    <span>الضريبة</span>
+                    <b>{money(cartTotals.tax)}</b>
+                  </div>
+                )}
+                <div className="grand">
+                  <span>الصافي</span>
+                  <b>{money(cartTotals.total)}</b>
+                </div>
               </div>
               <input
                 className="customer-input"
