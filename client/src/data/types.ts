@@ -384,6 +384,53 @@ export type BatchConsumption = {
   expiryDate?: string;
 };
 
+
+/**
+ * دور المستخدم يحدد ما يراه وما يفعله.
+ *
+ * تنبيه صريح: هذه ضوابط تشغيلية لا حاجز أمني. البيانات محفوظة في
+ * متصفح الجهاز، ومن يفتح أدوات المطور يستطيع تجاوزها. فائدتها منع
+ * الأخطاء العابرة وتثبيت المسؤولية، لا حماية من عبث متعمّد.
+ */
+export type UserRole = "owner" | "manager" | "cashier";
+
+/** الصلاحيات المتاحة، كل واحدة تحكم فعلًا محددًا. */
+export type Permission =
+  | "sell"
+  | "purchase"
+  | "voidInvoice"
+  | "editCost"
+  | "viewProfit"
+  | "manageUsers"
+  | "closePeriod"
+  | "stockTake"
+  | "backup";
+
+export type User = {
+  id: number;
+  name: string;
+  role: UserRole;
+  /** رمز دخول قصير؛ ليس تشفيرًا بل تمييزًا بين الموظفين. */
+  pin: string;
+  active: boolean;
+  createdAt: string;
+};
+
+/** قيد في سجل التدقيق: من فعل ماذا ومتى. */
+export type AuditEntry = {
+  id: number;
+  at: string;
+  userId?: number;
+  userName: string;
+  /** اسم العملية: postSale, voidPurchase… */
+  action: string;
+  /** وصف عربي مقروء لما جرى. */
+  description: string;
+  /** نوع المستند المتأثر ورقمه، للربط. */
+  refType?: string;
+  refNo?: number;
+};
+
 /** الحالة الكاملة المحفوظة؛ كل ما يخص المحل في مكان واحد. */
 export type DbState = {
   version: number;
@@ -402,4 +449,8 @@ export type DbState = {
   closedPeriods: FiscalPeriod[];
   cashSessions: CashSession[];
   batches: Batch[];
+  users: User[];
+  auditLog: AuditEntry[];
+  /** معرّف المستخدم النشط في هذا الجهاز. */
+  currentUserId?: number;
 };

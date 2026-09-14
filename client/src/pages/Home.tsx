@@ -43,6 +43,7 @@ import {
   Truck,
   Upload,
   UserRound,
+  UserCog,
   UsersRound,
   Wallet,
   WalletCards,
@@ -112,8 +113,15 @@ import {
   expectedCash,
   openCashSession,
 } from "../data/session";
+import {
+  createUser,
+  login,
+  logout,
+  updateUser,
+} from "../data/users";
 import type {
   Customer,
+  User,
   DbState,
   Expense,
   ExpenseCategory,
@@ -137,6 +145,7 @@ import TrialBalanceBoard from "../components/TrialBalanceBoard";
 import LedgerBoard from "../components/LedgerBoard";
 import SessionBoard from "../components/SessionBoard";
 import BatchesBoard from "../components/BatchesBoard";
+import UsersBoard from "../components/UsersBoard";
 import ProductUnitsDialog from "../components/ProductUnitsDialog";
 import { useUsbScanner } from "../hooks/useUsbScanner";
 import { useInstallPrompt } from "../hooks/useInstallPrompt";
@@ -235,6 +244,7 @@ const menu = [
   { id: "trialbalance", label: "ميزان المراجعة", icon: Scale },
   { id: "datatools", label: "الجرد والاستيراد", icon: ClipboardList },
   { id: "reports", label: "التقارير", icon: BarChart3 },
+  { id: "users", label: "المستخدمون والتدقيق", icon: UserCog },
 ];
 
 /** لون تاريخ الصلاحية: أحمر للمنتهي وبرتقالي للمقترب. */
@@ -319,6 +329,9 @@ export default function Home() {
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
   const { canInstall, install } = useInstallPrompt();
   const [showExpense, setShowExpense] = useState(false);
+  const [showUser, setShowUser] = useState(false);
+  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [showLogin, setShowLogin] = useState(false);
   const [showOpenSession, setShowOpenSession] = useState(false);
   const [showCloseSession, setShowCloseSession] = useState(false);
   const [showOpening, setShowOpening] = useState(false);
@@ -906,6 +919,49 @@ export default function Home() {
     );
   };
 
+  const submitUser = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    const payload = {
+      name: String(fd.get("name") || ""),
+      role: String(fd.get("role") || "cashier") as
+        | "owner"
+        | "manager"
+        | "cashier",
+      pin: String(fd.get("pin") || ""),
+    };
+    const target = editingUser;
+    runSafe(
+      draft =>
+        target
+          ? updateUser(draft, target.id, payload)
+          : createUser(draft, payload),
+      () => {
+        setShowUser(false);
+        setEditingUser(null);
+        toast.success(target ? "تم تعديل المستخدم" : "تمت إضافة المستخدم");
+      }
+    );
+  };
+
+  const submitLogin = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const pin = String(new FormData(e.currentTarget).get("pin") || "");
+    runSafe(
+      draft => login(draft, pin),
+      user => {
+        setShowLogin(false);
+        toast.success(`أهلًا ${user.name}`);
+      }
+    );
+  };
+
+  const doLogout = () =>
+    runSafe(
+      draft => logout(draft),
+      () => toast.success("تم تسجيل الخروج")
+    );
+
   const submitOpenSession = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
@@ -1450,6 +1506,16 @@ export default function Home() {
             onCollectCustomer={(c: Customer) => setCollecting(c)}
             onClosePeriod={() => setShowClosePeriod(true)}
             onOpenSession={() => setShowOpenSession(true)}
+            onAddUser={() => {
+              setEditingUser(null);
+              setShowUser(true);
+            }}
+            onEditUser={(u: User) => {
+              setEditingUser(u);
+              setShowUser(true);
+            }}
+            onLoginUser={() => setShowLogin(true)}
+            onLogoutUser={doLogout}
             onCloseSession={() => setShowCloseSession(true)}
             onOpenUnits={(p: Product) => setUnitsProduct(p)}
             onDeleteExpense={removeExpense}
@@ -1760,6 +1826,66 @@ export default function Home() {
             onAddBarcode={productUnitActions.addBarcode}
             onRemoveBarcode={productUnitActions.removeBarcode}
           />
+        </Modal>
+      )}
+      {showUser && (
+        <Modal
+          title={editingUser ? "تعديل مستخدم" : "إضافة مستخدم"}
+          onClose={() => {
+            setShowUser(false);
+            setEditingUser(null);
+          }}
+        >
+          <form className="product-form" onSubmit={submitUser}>
+            <SupplierField
+              label="الاسم"
+              name="name"
+              value={editingUser?.name}
+              placeholder="سالم"
+            />
+            <div className="form-grid">
+              <label className="field">
+                <span>الدور</span>
+                <select
+                  name="role"
+                  className="category-select"
+                  defaultValue={editingUser?.role || "cashier"}
+                >
+                  <option value="cashier">بائع — البيع فقط</option>
+                  <option value="manager">مدير — بلا إدارة مستخدمين</option>
+                  <option value="owner">مالك — كل الصلاحيات</option>
+                </select>
+              </label>
+              <SupplierField
+                label="رمز الدخول (4-6 أرقام)"
+                name="pin"
+                value={editingUser?.pin}
+                placeholder="1234"
+              />
+            </div>
+            {!state.users?.length && (
+              <div className="search-hint">
+                أول مستخدم يكون مالكًا دائمًا، حتى لا يُغلق النظام على الجميع.
+              </div>
+            )}
+            <button className="primary-btn full" type="submit">
+              <Check size={18} /> {editingUser ? "حفظ التعديل" : "حفظ المستخدم"}
+            </button>
+          </form>
+        </Modal>
+      )}
+      {showLogin && (
+        <Modal title="تسجيل الدخول" onClose={() => setShowLogin(false)}>
+          <form className="product-form" onSubmit={submitLogin}>
+            <SupplierField
+              label="رمز الدخول"
+              name="pin"
+              placeholder="أدخل رمزك"
+            />
+            <button className="primary-btn full" type="submit">
+              <Check size={18} /> دخول
+            </button>
+          </form>
         </Modal>
       )}
       {showOpenSession && (
@@ -2319,6 +2445,10 @@ function ModuleView({
   onCollectCustomer,
   onClosePeriod,
   onOpenSession,
+  onAddUser,
+  onEditUser,
+  onLoginUser,
+  onLogoutUser,
   onCloseSession,
   onDeleteExpense,
   search,
@@ -2340,6 +2470,10 @@ function ModuleView({
       "كل صنف في مكانه، والناقص يظهر قبل أن يفاجئك.",
     ],
     customers: ["العملاء", "كشوف حسابات، بيع آجل، وتحصيل."],
+    users: [
+      "المستخدمون والتدقيق",
+      "من يعمل على النظام، وماذا يستطيع، وسجل بما نُفّذ.",
+    ],
     batches: [
       "الدفعات والصلاحيات",
       "تشغيلات الأصناف بصلاحياتها، والأقرب انتهاءً يُصرف أولًا.",
@@ -2626,6 +2760,14 @@ function ModuleView({
         />
       ) : active === "reports" ? (
         <ReportsBoard state={state} />
+      ) : active === "users" ? (
+        <UsersBoard
+          state={state}
+          onAdd={onAddUser}
+          onEdit={onEditUser}
+          onLogin={onLoginUser}
+          onLogout={onLogoutUser}
+        />
       ) : active === "batches" ? (
         <BatchesBoard state={state} money={moneyFn} />
       ) : active === "session" ? (
