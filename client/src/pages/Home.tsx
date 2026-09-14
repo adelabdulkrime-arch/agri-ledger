@@ -27,6 +27,7 @@ import {
   Lock,
   Menu,
   PackagePlus,
+  PackageSearch,
   Plus,
   Printer,
   Scale,
@@ -135,6 +136,7 @@ import DataToolsBoard from "../components/DataToolsBoard";
 import TrialBalanceBoard from "../components/TrialBalanceBoard";
 import LedgerBoard from "../components/LedgerBoard";
 import SessionBoard from "../components/SessionBoard";
+import BatchesBoard from "../components/BatchesBoard";
 import ProductUnitsDialog from "../components/ProductUnitsDialog";
 import { useUsbScanner } from "../hooks/useUsbScanner";
 import { useInstallPrompt } from "../hooks/useInstallPrompt";
@@ -222,6 +224,7 @@ const menu = [
   { id: "operations", label: "العمليات", icon: ArrowLeftRight },
   { id: "sales", label: "المبيعات والفواتير", icon: ShoppingCart },
   { id: "inventory", label: "المخزون والمنتجات", icon: Boxes },
+  { id: "batches", label: "الدفعات والصلاحيات", icon: PackageSearch },
   { id: "purchases", label: "المشتريات", icon: ShoppingBag },
   { id: "suppliers", label: "الموردون", icon: Truck },
   { id: "customers", label: "العملاء", icon: UsersRound },
@@ -2337,6 +2340,10 @@ function ModuleView({
       "كل صنف في مكانه، والناقص يظهر قبل أن يفاجئك.",
     ],
     customers: ["العملاء", "كشوف حسابات، بيع آجل، وتحصيل."],
+    batches: [
+      "الدفعات والصلاحيات",
+      "تشغيلات الأصناف بصلاحياتها، والأقرب انتهاءً يُصرف أولًا.",
+    ],
     session: [
       "وردية الصندوق",
       "افتح الوردية صباحًا، وأقفلها مساءً بعد عدّ النقد.",
@@ -2619,6 +2626,8 @@ function ModuleView({
         />
       ) : active === "reports" ? (
         <ReportsBoard state={state} />
+      ) : active === "batches" ? (
+        <BatchesBoard state={state} money={moneyFn} />
       ) : active === "session" ? (
         <SessionBoard
           state={state}
