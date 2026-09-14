@@ -23,6 +23,7 @@ import type {
 } from "./types";
 import { nextId, nextNumber } from "./store";
 import { ACC, postJournal, reverseJournal } from "./ledger";
+import { consumeFEFO, createBatch, restoreBatches } from "./batches";
 
 /** خطأ عمل معروف؛ رسالته عربية جاهزة للعرض للمستخدم. */
 export class OperationError extends Error {}
@@ -209,6 +210,10 @@ export type PurchaseInput = {
     unitCost: number;
     discount?: number;
     tax?: number;
+    /** رقم التشغيلة المطبوع على العبوة؛ يُنشئ دفعة عند تعبئته. */
+    lotNo?: string;
+    /** صلاحية هذه الدفعة تحديدًا. */
+    expiryDate?: string;
   }[];
   paymentMethod: PaymentMethod;
   paid?: number;
@@ -261,6 +266,8 @@ export function buildPurchaseDraft(state: DbState, input: PurchaseInput) {
       discount,
       tax,
       total: round2(gross - discount + tax),
+      lotNo: (raw.lotNo || "").trim() || undefined,
+      expiryDate: raw.expiryDate || undefined,
     };
   });
 
@@ -406,6 +413,21 @@ function applyPurchaseToInventory(state: DbState, purchase: Purchase) {
       effectiveUnitCost
     );
     product.lastCost = effectiveUnitCost;
+
+    // رقم التشغيلة يُنشئ دفعة مستقلة بصلاحيتها، فالصنف الواحد قد يصل
+    // بصلاحيات مختلفة ولا يصح خلطها.
+    if (line.lotNo)
+      createBatch(state, {
+        productId: line.productId,
+        productName: line.name,
+        lotNo: line.lotNo,
+        expiryDate: line.expiryDate,
+        qty: line.qty,
+        unitCost: effectiveUnitCost,
+        purchaseNo: purchase.no,
+        supplierName: purchase.supplierName,
+        at: purchase.at,
+      });
 
     recordMove(state, {
       productId: line.productId,
@@ -656,6 +678,11 @@ export function postSale(state: DbState, input: SaleInput): Sale {
   });
 
   lines.forEach(line => {
+    // الصرف بقاعدة الأقرب انتهاءً أولًا، وتُسجَّل الدفعات في السطر
+    // ليمكن تتبّع من اشترى أي تشغيلة عند الحاجة لسحبها.
+    const consumed = consumeFEFO(state, line.id, line.qty);
+    if (consumed.length) line.batches = consumed;
+
     recordMove(state, {
       productId: line.id,
       productName: line.name,
@@ -665,7 +692,9 @@ export function postSale(state: DbState, input: SaleInput): Sale {
       refType: "sale",
       refNo: no,
       at,
-      note: "بيع",
+      note: consumed.length
+        ? `بيع · تشغيلة ${consumed.map(c => c.lotNo).join("، ")}`
+        : "بيع",
     });
   });
 
@@ -886,6 +915,10 @@ export function postSaleReturn(
   });
 
   lines.forEach(line => {
+    // البضاعة تعود إلى دفعاتها الأصلية بعكس ترتيب الصرف.
+    const original = sale.lines.find(l => l.id === line.productId);
+    restoreBatches(state, original?.batches, line.qty);
+
     recordMove(state, {
       productId: line.productId,
       productName: line.name,

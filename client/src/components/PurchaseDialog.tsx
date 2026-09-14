@@ -25,6 +25,10 @@ export type PurchaseDraftLine = {
   unitCost: number;
   discount: number;
   tax: number;
+  /** رقم التشغيلة المطبوع على العبوة؛ يُنشئ دفعة مستقلة بصلاحيتها. */
+  lotNo?: string;
+  /** صلاحية هذه الدفعة تحديدًا، لا صلاحية الصنف عمومًا. */
+  expiryDate?: string;
 };
 
 type Props = {
@@ -91,6 +95,8 @@ export default function PurchaseDialog({
           unitCost: product.lastCost || 0,
           discount: 0,
           tax: 0,
+          lotNo: "",
+          expiryDate: "",
         },
       ];
     });
@@ -293,6 +299,26 @@ export default function PurchaseDialog({
                   value={line.tax}
                   onChange={e =>
                     update(line.productId, { tax: Number(e.target.value) })
+                  }
+                />
+              </label>
+              <label>
+                <span>رقم التشغيلة</span>
+                <input
+                  value={line.lotNo || ""}
+                  placeholder="اختياري"
+                  onChange={e =>
+                    update(line.productId, { lotNo: e.target.value })
+                  }
+                />
+              </label>
+              <label>
+                <span>الصلاحية</span>
+                <input
+                  type="date"
+                  value={line.expiryDate || ""}
+                  onChange={e =>
+                    update(line.productId, { expiryDate: e.target.value })
                   }
                 />
               </label>

@@ -55,6 +55,8 @@ export type SaleLine = {
   soldUnit?: string;
   /** الكمية بوحدة البيع المختارة؛ 2 كرتون بدل 24 عبوة. */
   soldQty?: number;
+  /** الدفعات التي خرجت منها هذه الكمية، للتتبع عند السحب. */
+  batches?: BatchConsumption[];
   /** خصم على مستوى السطر بالقيمة لا بالنسبة. */
   discount: number;
   /** ضريبة السطر بالقيمة؛ صفر عندما لا يستخدم المحل الضريبة. */
@@ -111,6 +113,10 @@ export type PurchaseLine = {
   /** ضريبة السطر بالقيمة؛ صفر عندما لا يستخدم المحل الضريبة. */
   tax: number;
   total: number;
+  /** رقم التشغيلة المطبوع على العبوة؛ يُنشئ دفعة عند تعبئته. */
+  lotNo?: string;
+  /** صلاحية هذه الدفعة تحديدًا، لا صلاحية الصنف عمومًا. */
+  expiryDate?: string;
 };
 
 export type PaymentMethod = "cash" | "credit" | "partial";
@@ -346,6 +352,38 @@ export type CashSession = {
   note: string;
 };
 
+
+/**
+ * دفعة (تشغيلة) من صنف: كمية وصلت بتاريخ صلاحية وتكلفة محددة.
+ * ضرورية للمبيدات والأسمدة، إذ يصل الصنف الواحد بصلاحيات مختلفة،
+ * وعند سحب دفعة معيبة يجب معرفة من اشتراها.
+ */
+export type Batch = {
+  id: number;
+  productId: number;
+  productName: string;
+  /** رقم التشغيلة كما هو مطبوع على العبوة. */
+  lotNo: string;
+  expiryDate?: string;
+  /** الكمية التي وصلت أصلًا. */
+  qtyReceived: number;
+  /** المتبقي منها بعد البيع والمرتجعات. */
+  qtyRemaining: number;
+  unitCost: number;
+  /** رقم فاتورة الشراء التي أدخلتها. */
+  purchaseNo: number;
+  supplierName: string;
+  receivedAt: string;
+};
+
+/** استهلاك دفعة في عملية بيع، لتتبّع من اشترى أي تشغيلة. */
+export type BatchConsumption = {
+  batchId: number;
+  lotNo: string;
+  qty: number;
+  expiryDate?: string;
+};
+
 /** الحالة الكاملة المحفوظة؛ كل ما يخص المحل في مكان واحد. */
 export type DbState = {
   version: number;
@@ -363,4 +401,5 @@ export type DbState = {
   journal: JournalEntry[];
   closedPeriods: FiscalPeriod[];
   cashSessions: CashSession[];
+  batches: Batch[];
 };
