@@ -20,12 +20,14 @@ import {
   FilePlus2,
   FileText,
   FolderOpen,
+  HandCoins,
   HelpCircle,
   LayoutDashboard,
   Menu,
   PackagePlus,
   Plus,
   Printer,
+  Scale,
   Search,
   Settings2,
   ShieldCheck,
@@ -62,6 +64,12 @@ import {
   unitPrice,
   unitsOf,
   addExpense,
+  collectFromCustomer,
+  createCustomer,
+  customerBalance,
+  postStockTake,
+  resetOpeningBalances,
+  updateCustomer,
   createSupplier,
   deleteExpense,
   expensesTotal,
@@ -89,7 +97,9 @@ import {
   migrate,
   storageUsage,
 } from "../data/store";
+import { importCsv, type ImportKind } from "../data/importer";
 import type {
+  Customer,
   DbState,
   Expense,
   ExpenseCategory,
@@ -107,6 +117,9 @@ import PurchasesBoard from "../components/PurchasesBoard";
 import PaymentDialog from "../components/PaymentDialog";
 import ReturnDialog from "../components/ReturnDialog";
 import ExpensesBoard from "../components/ExpensesBoard";
+import CustomersBoardNew from "../components/CustomersBoard";
+import DataToolsBoard from "../components/DataToolsBoard";
+import TrialBalanceBoard from "../components/TrialBalanceBoard";
 import ProductUnitsDialog from "../components/ProductUnitsDialog";
 import { useUsbScanner } from "../hooks/useUsbScanner";
 import { useInstallPrompt } from "../hooks/useInstallPrompt";
@@ -195,6 +208,8 @@ const menu = [
   { id: "customers", label: "العملاء", icon: UsersRound },
   { id: "expenses", label: "المصروفات", icon: WalletCards },
   { id: "accounts", label: "الحسابات", icon: Calculator },
+  { id: "trialbalance", label: "ميزان المراجعة", icon: Scale },
+  { id: "datatools", label: "الجرد والاستيراد", icon: ClipboardList },
   { id: "reports", label: "التقارير", icon: BarChart3 },
 ];
 
@@ -279,6 +294,9 @@ export default function Home() {
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
   const { canInstall, install } = useInstallPrompt();
   const [showExpense, setShowExpense] = useState(false);
+  const [showCustomer, setShowCustomer] = useState(false);
+  const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
+  const [collecting, setCollecting] = useState<Customer | null>(null);
   const [unitsProduct, setUnitsProduct] = useState<Product | null>(null);
   const [payingPurchase, setPayingPurchase] = useState<Purchase | null>(null);
   const [returning, setReturning] = useState<{
@@ -735,6 +753,89 @@ export default function Home() {
     },
   };
 
+  const submitCustomer = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    const payload = {
+      name: String(fd.get("name") || ""),
+      phone: String(fd.get("phone") || ""),
+      address: String(fd.get("address") || ""),
+      taxNumber: String(fd.get("taxNumber") || ""),
+      terms: (String(fd.get("terms") || "cash") === "credit"
+        ? "credit"
+        : "cash") as "cash" | "credit",
+      creditLimit: Number(fd.get("creditLimit") || 0),
+    };
+    const target = editingCustomer;
+    runSafe(
+      draft =>
+        target
+          ? updateCustomer(draft, target.id, payload)
+          : createCustomer(draft, payload),
+      () => {
+        setShowCustomer(false);
+        setEditingCustomer(null);
+        toast.success(target ? "تم تعديل بيانات العميل" : "تمت إضافة العميل");
+      }
+    );
+  };
+
+  const submitCollection = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!collecting) return;
+    const amount = Number(new FormData(e.currentTarget).get("amount") || 0);
+    runSafe(
+      draft => collectFromCustomer(draft, collecting.id, amount),
+      () => {
+        setCollecting(null);
+        toast.success("تم تسجيل التحصيل");
+      }
+    );
+  };
+
+  /** الجرد يضبط الأرصدة على الواقع ويترك أثرًا في سجل الحركات. */
+  const submitStockTake = (
+    lines: { productId: number; countedQty: number; unitCost?: number }[]
+  ) => {
+    runSafe(
+      draft => postStockTake(draft, lines),
+      moves =>
+        toast.success(
+          moves.length
+            ? `تم الجرد: ${moves.length} صنفًا عُدّل رصيده`
+            : "تم الجرد: الأرصدة مطابقة للواقع"
+        )
+    );
+  };
+
+  const submitResetOpening = () => {
+    // تحذير صريح قبل عملية لا رجعة فيها على كل الأصناف.
+    const warning = [
+      "تصفير كل الأرصدة والتكاليف الابتدائية؟",
+      "",
+      "يبقى الأثر مسجلًا في حركات المخزون، ثم أدخل مخزونك الحقيقي",
+      "عبر فواتير الشراء أو الاستيراد.",
+    ].join("\n");
+    if (!window.confirm(warning)) return;
+    runSafe(
+      draft => resetOpeningBalances(draft),
+      count =>
+        toast.success(
+          count ? `تم تصفير ${count} صنفًا` : "الأرصدة مصفّرة أصلًا"
+        )
+    );
+  };
+
+  const submitImport = (kind: ImportKind, text: string) => {
+    runSafe(
+      draft => importCsv(draft, kind, text),
+      r =>
+        toast.success(
+          `تم الاستيراد: ${r.added} جديد، ${r.updated} محدّث، ${r.skipped} متخطى`
+        )
+    );
+  };
+
   const handlePay = (purchase: Purchase) => setPayingPurchase(purchase);
 
   const submitPayment = (amount: number) => {
@@ -1176,6 +1277,18 @@ export default function Home() {
               setReturning({ kind, source })
             }
             onAddExpense={() => setShowExpense(true)}
+            onStockTake={submitStockTake}
+            onResetOpening={submitResetOpening}
+            onImport={submitImport}
+            onAddCustomer={() => {
+              setEditingCustomer(null);
+              setShowCustomer(true);
+            }}
+            onEditCustomer={(c: Customer) => {
+              setEditingCustomer(c);
+              setShowCustomer(true);
+            }}
+            onCollectCustomer={(c: Customer) => setCollecting(c)}
             onOpenUnits={(p: Product) => setUnitsProduct(p)}
             onDeleteExpense={removeExpense}
           />
@@ -1417,6 +1530,83 @@ export default function Home() {
             onAddBarcode={productUnitActions.addBarcode}
             onRemoveBarcode={productUnitActions.removeBarcode}
           />
+        </Modal>
+      )}
+      {showCustomer && (
+        <Modal
+          title={editingCustomer ? "تعديل عميل" : "إضافة عميل"}
+          onClose={() => {
+            setShowCustomer(false);
+            setEditingCustomer(null);
+          }}
+        >
+          <form className="product-form" onSubmit={submitCustomer}>
+            <SupplierField
+              label="اسم العميل"
+              name="name"
+              value={editingCustomer?.name}
+              placeholder="مزرعة النخيل"
+            />
+            <div className="form-grid">
+              <SupplierField
+                label="رقم الهاتف"
+                name="phone"
+                value={editingCustomer?.phone}
+                placeholder="7xxxxxxxx"
+              />
+              <label className="field">
+                <span>نوع التعامل</span>
+                <select
+                  name="terms"
+                  className="category-select"
+                  defaultValue={editingCustomer?.terms || "cash"}
+                >
+                  <option value="cash">نقدي</option>
+                  <option value="credit">آجل</option>
+                </select>
+              </label>
+            </div>
+            <div className="form-grid">
+              <SupplierField
+                label="حد الائتمان (صفر = بلا حد)"
+                name="creditLimit"
+                value={String(editingCustomer?.creditLimit ?? 0)}
+                placeholder="0"
+              />
+              <SupplierField
+                label="العنوان"
+                name="address"
+                value={editingCustomer?.address}
+                placeholder="اختياري"
+              />
+            </div>
+            <button className="primary-btn full" type="submit">
+              <Check size={18} />{" "}
+              {editingCustomer ? "حفظ التعديل" : "حفظ العميل"}
+            </button>
+          </form>
+        </Modal>
+      )}
+      {collecting && (
+        <Modal
+          title={`تحصيل من ${collecting.name}`}
+          onClose={() => setCollecting(null)}
+        >
+          <form className="product-form" onSubmit={submitCollection}>
+            <div className="backup-reminder">
+              <HandCoins size={18} />
+              <span>المستحق على العميل</span>
+              <b>{money(customerBalance(state, collecting.id))}</b>
+            </div>
+            <SupplierField
+              label="قيمة التحصيل"
+              name="amount"
+              placeholder="0"
+            />
+            <button className="primary-btn full" type="submit">
+              <Check size={18} /> تسجيل التحصيل
+            </button>
+          </form>
         </Modal>
       )}
       {showExpense && (
@@ -1789,6 +1979,12 @@ function ModuleView({
   onReturn,
   onAddExpense,
   onOpenUnits,
+  onStockTake,
+  onResetOpening,
+  onImport,
+  onAddCustomer,
+  onEditCustomer,
+  onCollectCustomer,
   onDeleteExpense,
   search,
   setSearch,
@@ -1808,7 +2004,15 @@ function ModuleView({
       "المخزون والمنتجات",
       "كل صنف في مكانه، والناقص يظهر قبل أن يفاجئك.",
     ],
-    customers: ["العملاء", "دفتر علاقات بسيط يساعدك على البيع الآجل."],
+    customers: ["العملاء", "كشوف حسابات، بيع آجل، وتحصيل."],
+    trialbalance: [
+      "ميزان المراجعة",
+      "مدين ودائن لكل حساب، ويجب أن يتوازن الجانبان.",
+    ],
+    datatools: [
+      "الجرد والاستيراد",
+      "اضبط الأرصدة على الواقع، أو استورد بياناتك من ملف.",
+    ],
     purchases: [
       "المشتريات",
       "سجّل فواتير الموردين لتعرف تكلفتك الحقيقية وربحك.",
@@ -2075,8 +2279,24 @@ function ModuleView({
         />
       ) : active === "reports" ? (
         <ReportsBoard state={state} />
+      ) : active === "trialbalance" ? (
+        <TrialBalanceBoard state={state} money={moneyFn} />
+      ) : active === "datatools" ? (
+        <DataToolsBoard
+          state={state}
+          money={moneyFn}
+          onStockTake={onStockTake}
+          onResetOpening={onResetOpening}
+          onImport={onImport}
+        />
       ) : active === "customers" ? (
-        <CustomersBoard sales={sales} />
+        <CustomersBoardNew
+          state={state}
+          money={moneyFn}
+          onAdd={onAddCustomer}
+          onEdit={onEditCustomer}
+          onCollect={onCollectCustomer}
+        />
       ) : active === "accounts" ? (
         <AccountsBoard state={state} />
       ) : (
