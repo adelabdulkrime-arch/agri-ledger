@@ -3,7 +3,7 @@
 import type { DbState, Product } from "./types";
 
 export const DB_KEY = "agri-db";
-export const SCHEMA_VERSION = 14;
+export const SCHEMA_VERSION = 15;
 
 /** المفاتيح القديمة قبل توحيد التخزين؛ نقرأ منها مرة واحدة ثم نتركها كنسخة أمان. */
 const LEGACY_PRODUCTS = "agri-products";
@@ -29,6 +29,16 @@ export function emptyState(): DbState {
     batches: [],
     users: [],
     auditLog: [],
+    settings: {
+      name: "",
+      tradeName: "",
+      taxNumber: "",
+      crNumber: "",
+      address: "",
+      phone: "",
+      vatRate: 0,
+      vatRegistered: false,
+    },
   };
 }
 
@@ -189,6 +199,24 @@ export function migrate(input: any): DbState {
     state.users = state.users || [];
     state.auditLog = state.auditLog || [];
     version = 14;
+  }
+
+  // 14 -> 15: بيانات المحل للفاتورة النظامية.
+  // لا نفترض أن المحل مسجَّل في الضريبة: من لم يسجّل لا تُفرض عليه فاتورة
+  // ضريبية، ومن سجّل يملأ رقمه من شاشة الإعدادات.
+  if (version < 15) {
+    if (!state.settings)
+      state.settings = {
+        name: "",
+        tradeName: "",
+        taxNumber: "",
+        crNumber: "",
+        address: "",
+        phone: "",
+        vatRate: 0,
+        vatRegistered: false,
+      };
+    version = 15;
   }
 
   state.version = version;

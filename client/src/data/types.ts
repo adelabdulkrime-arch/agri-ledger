@@ -431,6 +431,29 @@ export type AuditEntry = {
   refNo?: number;
 };
 
+/**
+ * بيانات المحل التي تظهر على الفاتورة النظامية وفي التقارير.
+ * كانت مكتوبة داخل الكود، فلم يكن بوسع أحد تغييرها دون تعديل البرنامج.
+ */
+export type ShopSettings = {
+  name: string;
+  /** الاسم التجاري إن اختلف عن اسم المنشأة. */
+  tradeName: string;
+  /** رقم التسجيل في ضريبة القيمة المضافة؛ إلزامي في الفاتورة الضريبية. */
+  taxNumber: string;
+  /** رقم السجل التجاري. */
+  crNumber: string;
+  address: string;
+  phone: string;
+  /** النسبة الافتراضية المقترحة عند إدخال الضريبة. */
+  vatRate: number;
+  /**
+   * هل المحل مسجَّل في ضريبة القيمة المضافة؟
+   * غير المسجَّل لا يصدر فاتورة ضريبية ولا يخصم ضريبة مدخلات.
+   */
+  vatRegistered: boolean;
+};
+
 /** الحالة الكاملة المحفوظة؛ كل ما يخص المحل في مكان واحد. */
 export type DbState = {
   version: number;
@@ -453,4 +476,6 @@ export type DbState = {
   auditLog: AuditEntry[];
   /** معرّف المستخدم النشط في هذا الجهاز. */
   currentUserId?: number;
+  /** بيانات المحل؛ اختيارية لأن النسخ القديمة لا تحملها. */
+  settings?: ShopSettings;
 };

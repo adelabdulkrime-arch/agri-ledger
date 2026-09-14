@@ -20,6 +20,8 @@ export const ACC = {
   bank: "1110",
   receivables: "1200",
   inventory: "1300",
+  /** ضريبة مدخلات مدفوعة للموردين، تُخصم من ضريبة المخرجات لا تُحمَّل على التكلفة. */
+  vatInput: "1400",
   payables: "2100",
   vatPayable: "2200",
   capital: "3100",
@@ -58,6 +60,7 @@ export function defaultChart(): Account[] {
     a(ACC.bank, "البنك", "asset", "1000"),
     a(ACC.receivables, "ذمم مدينة — العملاء", "asset", "1000"),
     a(ACC.inventory, "المخزون", "asset", "1000"),
+    a(ACC.vatInput, "ضريبة القيمة المضافة — مدخلات", "asset", "1000"),
 
     a("2000", "الخصوم", "liability"),
     a(ACC.payables, "ذمم دائنة — الموردون", "liability", "2000"),

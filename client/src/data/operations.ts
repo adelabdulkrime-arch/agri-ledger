@@ -362,6 +362,8 @@ export function postPurchase(state: DbState, input: PurchaseInput): Purchase {
 
   // قيد الشراء: المخزون مدين بالكامل، والدائن موزّع بين ما دُفع نقدًا
   // وما بقي في ذمة المورد.
+  // ضريبة المدخلات أصل يُسترد من الهيئة، فلا تُحمَّل على المخزون.
+  const inputVat = recoversInputVat(state) ? purchase.tax : 0;
   const credited: {
     accountCode: string;
     debit?: number;
@@ -370,10 +372,16 @@ export function postPurchase(state: DbState, input: PurchaseInput): Purchase {
   }[] = [
     {
       accountCode: ACC.inventory,
-      debit: purchase.total,
+      debit: round2(purchase.total - inputVat),
       memo: "بضاعة واردة",
     },
   ];
+  if (inputVat > 0)
+    credited.push({
+      accountCode: ACC.vatInput,
+      debit: inputVat,
+      memo: "ضريبة مدخلات",
+    });
   if (purchase.paid > 0)
     credited.push({
       accountCode: ACC.cash,
@@ -398,14 +406,30 @@ export function postPurchase(state: DbState, input: PurchaseInput): Purchase {
   return purchase;
 }
 
+/**
+ * هل تُفصل ضريبة المدخلات عن التكلفة؟
+ *
+ * المحل المسجَّل في ضريبة القيمة المضافة يستردها من الهيئة، فهي أصل لا
+ * تكلفة. وغير المسجَّل لا يستردها، فتبقى جزءًا من ثمن البضاعة كما كانت.
+ * لهذا يبقى سلوك النسخ القائمة كما هو ما لم يُفعّل التسجيل من الإعدادات.
+ */
+export function recoversInputVat(state: DbState) {
+  return state.settings?.vatRegistered === true;
+}
+
+/** تكلفة السطر الداخلة في المخزون: بلا ضريبة عند استردادها. */
+function lineCostBase(state: DbState, line: { total: number; tax: number }) {
+  return recoversInputVat(state) ? round2(line.total - line.tax) : line.total;
+}
+
 /** يزيد المخزون ويحدّث متوسط التكلفة لكل بند في الفاتورة. */
 function applyPurchaseToInventory(state: DbState, purchase: Purchase) {
   purchase.lines.forEach(line => {
     const product = state.products.find(p => p.id === line.productId);
     if (!product) fail(`الصنف غير موجود: ${line.name}`);
 
-    // التكلفة الفعلية للوحدة تشمل الخصم والضريبة الموزعين على السطر.
-    const effectiveUnitCost = round2(line.total / line.qty);
+    // التكلفة الفعلية للوحدة تشمل الخصم، وتشمل الضريبة فقط حين لا تُسترد.
+    const effectiveUnitCost = round2(lineCostBase(state, line) / line.qty);
     product.avgCost = weightedAverage(
       product.stock,
       product.avgCost,
@@ -469,7 +493,7 @@ export function voidPurchase(state: DbState, no: number): Purchase {
       productName: line.name,
       type: "PURCHASE_VOID",
       qty: -line.qty,
-      unitCost: round2(line.total / line.qty),
+      unitCost: round2(lineCostBase(state, line) / line.qty),
       refType: "purchase",
       refNo: purchase.no,
       at,
@@ -1032,13 +1056,18 @@ export function postPurchaseReturn(
         `الرصيد الحالي من ${original.name} هو ${product.stock}، لا يكفي للإرجاع`
       );
 
-    const unitCost = round2(original.total / original.qty);
+    // تكلفة الإرجاع بنفس الأساس الذي دخل به الصنف المخزون.
+    const unitCost = round2(lineCostBase(state, original) / original.qty);
+    // نسبة الضريبة في السطر تُرد للهيئة مع المرتجع.
+    const unitVat = recoversInputVat(state)
+      ? round2(original.tax / original.qty)
+      : 0;
     return {
       productId: original.productId,
       name: original.name,
       unit: original.unit,
       qty,
-      unitPrice: unitCost,
+      unitPrice: round2(unitCost + unitVat),
       unitCost,
       total: round2(qty * unitCost),
     };
@@ -1090,14 +1119,34 @@ export function postPurchaseReturn(
   purchase.balance = round2(Math.max(0, purchase.total - purchase.paid));
 
   // قيد مرتجع الشراء: يخرج المخزون ويقل الالتزام تجاه المورد.
+  // ما رُدّ من ضريبة مدخلات يعود للهيئة، فيُعكس من حسابها لا من المخزون.
+  const returnedVat = round2(
+    lines.reduce(
+      (sum, l) => sum + round2((l.unitPrice - l.unitCost) * l.qty),
+      0
+    )
+  );
   postJournal(state, {
     at,
     source: "purchase_return",
     sourceNo: purchase.no,
     description: `مرتجع شراء إلى ${purchase.supplierName}`,
     lines: [
-      { accountCode: ACC.payables, debit: total, memo: purchase.supplierName },
+      {
+        accountCode: ACC.payables,
+        debit: round2(total + returnedVat),
+        memo: purchase.supplierName,
+      },
       { accountCode: ACC.inventory, credit: total, memo: "بضاعة مرتجعة" },
+      ...(returnedVat > 0
+        ? [
+            {
+              accountCode: ACC.vatInput,
+              credit: returnedVat,
+              memo: "عكس ضريبة مدخلات",
+            },
+          ]
+        : []),
     ],
   });
 
