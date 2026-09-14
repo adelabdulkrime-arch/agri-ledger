@@ -146,6 +146,7 @@ import LedgerBoard from "../components/LedgerBoard";
 import SessionBoard from "../components/SessionBoard";
 import BatchesBoard from "../components/BatchesBoard";
 import UsersBoard from "../components/UsersBoard";
+import AgingBoard from "../components/AgingBoard";
 import ProductUnitsDialog from "../components/ProductUnitsDialog";
 import { useUsbScanner } from "../hooks/useUsbScanner";
 import { useInstallPrompt } from "../hooks/useInstallPrompt";
@@ -244,6 +245,7 @@ const menu = [
   { id: "trialbalance", label: "ميزان المراجعة", icon: Scale },
   { id: "datatools", label: "الجرد والاستيراد", icon: ClipboardList },
   { id: "reports", label: "التقارير", icon: BarChart3 },
+  { id: "aging", label: "أعمار الديون", icon: HandCoins },
   { id: "users", label: "المستخدمون والتدقيق", icon: UserCog },
 ];
 
@@ -2474,6 +2476,10 @@ function ModuleView({
       "المستخدمون والتدقيق",
       "من يعمل على النظام، وماذا يستطيع، وسجل بما نُفّذ.",
     ],
+    aging: [
+      "أعمار الديون",
+      "من تأخر في السداد، وكم عليه، ومنذ متى.",
+    ],
     batches: [
       "الدفعات والصلاحيات",
       "تشغيلات الأصناف بصلاحياتها، والأقرب انتهاءً يُصرف أولًا.",
@@ -2760,6 +2766,8 @@ function ModuleView({
         />
       ) : active === "reports" ? (
         <ReportsBoard state={state} />
+      ) : active === "aging" ? (
+        <AgingBoard state={state} money={moneyFn} />
       ) : active === "users" ? (
         <UsersBoard
           state={state}
