@@ -374,6 +374,86 @@ export function balanceSheet(state: DbState, to?: Date) {
   };
 }
 
+/**
+ * رصيد افتتاحي للصندوق أو البنك مقابل رأس المال.
+ * بدونه يبدأ الميزان مائلًا لأن المشتريات تُنقص النقد من الصفر.
+ */
+export function postOpeningBalance(
+  state: DbState,
+  input: { cash?: number; bank?: number; at?: string; note?: string }
+): JournalEntry {
+  const cash = round2(Number(input.cash || 0));
+  const bank = round2(Number(input.bank || 0));
+  if (!Number.isFinite(cash) || !Number.isFinite(bank))
+    fail("قيمة الرصيد غير صحيحة");
+  if (cash < 0 || bank < 0) fail("الرصيد الافتتاحي لا يصح أن يكون سالبًا");
+  const total = round2(cash + bank);
+  if (total <= 0) fail("أدخل رصيدًا افتتاحيًا أكبر من صفر");
+
+  const lines: JournalInput["lines"] = [];
+  if (cash > 0)
+    lines.push({ accountCode: ACC.cash, debit: cash, memo: "رصيد افتتاحي" });
+  if (bank > 0)
+    lines.push({ accountCode: ACC.bank, debit: bank, memo: "رصيد افتتاحي" });
+  lines.push({ accountCode: ACC.capital, credit: total, memo: "رأس المال" });
+
+  return postJournal(state, {
+    at: input.at,
+    source: "opening",
+    sourceNo: 0,
+    description: input.note?.trim() || "رصيد افتتاحي",
+    lines,
+  });
+}
+
+/** قيد يدوي يكتبه المحاسب مباشرة، لما لا تغطيه العمليات الآلية. */
+export function postManualJournal(
+  state: DbState,
+  input: {
+    at?: string;
+    description: string;
+    lines: { accountCode: string; debit?: number; credit?: number; memo?: string }[];
+  }
+): JournalEntry {
+  const description = (input.description || "").trim();
+  if (!description) fail("اكتب بيانًا للقيد");
+  return postJournal(state, {
+    at: input.at,
+    source: "manual",
+    sourceNo: 0,
+    description,
+    lines: input.lines,
+  });
+}
+
+/** حركة نقدية بين الصندوق والبنك. */
+export function transferCash(
+  state: DbState,
+  input: { from: "cash" | "bank"; amount: number; at?: string; note?: string }
+): JournalEntry {
+  const amount = round2(Number(input.amount));
+  if (!Number.isFinite(amount) || amount <= 0) fail("قيمة التحويل غير صحيحة");
+  const fromCode = input.from === "cash" ? ACC.cash : ACC.bank;
+  const toCode = input.from === "cash" ? ACC.bank : ACC.cash;
+
+  const available = accountBalance(state, fromCode);
+  if (amount > available)
+    fail(`الرصيد المتاح هو ${available} فقط`);
+
+  return postJournal(state, {
+    at: input.at,
+    source: "transfer",
+    sourceNo: 0,
+    description:
+      input.note?.trim() ||
+      (input.from === "cash" ? "إيداع في البنك" : "سحب من البنك"),
+    lines: [
+      { accountCode: toCode, debit: amount, memo: "وارد" },
+      { accountCode: fromCode, credit: amount, memo: "صادر" },
+    ],
+  });
+}
+
 /** إقفال فترة: يمنع أي ترحيل بتاريخ داخلها. */
 export function closePeriod(
   state: DbState,

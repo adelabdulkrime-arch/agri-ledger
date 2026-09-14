@@ -6,6 +6,7 @@ import {
   ArrowLeftRight,
   BarChart3,
   Bell,
+  BookOpen,
   Boxes,
   Calculator,
   CalendarDays,
@@ -23,6 +24,7 @@ import {
   HandCoins,
   HelpCircle,
   LayoutDashboard,
+  Lock,
   Menu,
   PackagePlus,
   Plus,
@@ -98,6 +100,10 @@ import {
   storageUsage,
 } from "../data/store";
 import { importCsv, type ImportKind } from "../data/importer";
+import {
+  closePeriod,
+  postOpeningBalance,
+} from "../data/ledger";
 import type {
   Customer,
   DbState,
@@ -120,6 +126,7 @@ import ExpensesBoard from "../components/ExpensesBoard";
 import CustomersBoardNew from "../components/CustomersBoard";
 import DataToolsBoard from "../components/DataToolsBoard";
 import TrialBalanceBoard from "../components/TrialBalanceBoard";
+import LedgerBoard from "../components/LedgerBoard";
 import ProductUnitsDialog from "../components/ProductUnitsDialog";
 import { useUsbScanner } from "../hooks/useUsbScanner";
 import { useInstallPrompt } from "../hooks/useInstallPrompt";
@@ -208,6 +215,7 @@ const menu = [
   { id: "customers", label: "العملاء", icon: UsersRound },
   { id: "expenses", label: "المصروفات", icon: WalletCards },
   { id: "accounts", label: "الحسابات", icon: Calculator },
+  { id: "ledger", label: "الدفاتر المحاسبية", icon: BookOpen },
   { id: "trialbalance", label: "ميزان المراجعة", icon: Scale },
   { id: "datatools", label: "الجرد والاستيراد", icon: ClipboardList },
   { id: "reports", label: "التقارير", icon: BarChart3 },
@@ -294,6 +302,8 @@ export default function Home() {
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
   const { canInstall, install } = useInstallPrompt();
   const [showExpense, setShowExpense] = useState(false);
+  const [showOpening, setShowOpening] = useState(false);
+  const [showClosePeriod, setShowClosePeriod] = useState(false);
   const [showCustomer, setShowCustomer] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [collecting, setCollecting] = useState<Customer | null>(null);
@@ -836,6 +846,41 @@ export default function Home() {
     );
   };
 
+  const submitOpening = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    runSafe(
+      draft =>
+        postOpeningBalance(draft, {
+          cash: Number(fd.get("cash") || 0),
+          bank: Number(fd.get("bank") || 0),
+          note: String(fd.get("note") || ""),
+        }),
+      () => {
+        setShowOpening(false);
+        toast.success("تم تسجيل الرصيد الافتتاحي");
+      }
+    );
+  };
+
+  const submitClosePeriod = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    runSafe(
+      draft =>
+        closePeriod(
+          draft,
+          String(fd.get("from") || ""),
+          String(fd.get("to") || ""),
+          String(fd.get("note") || "")
+        ),
+      () => {
+        setShowClosePeriod(false);
+        toast.success("تم إقفال الفترة؛ لن تقبل قيودًا جديدة");
+      }
+    );
+  };
+
   const handlePay = (purchase: Purchase) => setPayingPurchase(purchase);
 
   const submitPayment = (amount: number) => {
@@ -1234,6 +1279,16 @@ export default function Home() {
                 </span>
                 <ChevronLeft size={18} />
               </button>
+              <button onClick={() => setShowOpening(true)}>
+                <div className="qa-icon yellow">
+                  <Scale />
+                </div>
+                <span>
+                  <b>رصيد افتتاحي</b>
+                  <small>ابدأ بنقدك الحالي</small>
+                </span>
+                <ChevronLeft size={18} />
+              </button>
               <button onClick={() => setShowBackup(true)}>
                 <div className="qa-icon blue">
                   <ShieldCheck />
@@ -1289,6 +1344,7 @@ export default function Home() {
               setShowCustomer(true);
             }}
             onCollectCustomer={(c: Customer) => setCollecting(c)}
+            onClosePeriod={() => setShowClosePeriod(true)}
             onOpenUnits={(p: Product) => setUnitsProduct(p)}
             onDeleteExpense={removeExpense}
           />
@@ -1530,6 +1586,57 @@ export default function Home() {
             onAddBarcode={productUnitActions.addBarcode}
             onRemoveBarcode={productUnitActions.removeBarcode}
           />
+        </Modal>
+      )}
+      {showOpening && (
+        <Modal title="الرصيد الافتتاحي" onClose={() => setShowOpening(false)}>
+          <form className="product-form" onSubmit={submitOpening}>
+            <div className="backup-reminder">
+              <Scale size={18} />
+              <span>
+                يُسجَّل النقد الموجود لديك مقابل رأس المال، فيبدأ الميزان
+                متوازنًا.
+              </span>
+            </div>
+            <div className="form-grid">
+              <SupplierField label="نقد في الصندوق" name="cash" placeholder="0" />
+              <SupplierField label="رصيد البنك" name="bank" placeholder="0" />
+            </div>
+            <SupplierField label="ملاحظة" name="note" placeholder="رصيد افتتاحي" />
+            <button className="primary-btn full" type="submit">
+              <Check size={18} /> ترحيل الرصيد الافتتاحي
+            </button>
+          </form>
+        </Modal>
+      )}
+      {showClosePeriod && (
+        <Modal title="إقفال فترة محاسبية" onClose={() => setShowClosePeriod(false)}>
+          <form className="product-form" onSubmit={submitClosePeriod}>
+            <div className="reset-warn">
+              <Lock size={18} />
+              <div>
+                <b>الإقفال لا رجعة فيه</b>
+                <span>
+                  لن تقبل الفترة أي قيد جديد بعد إقفالها، وهذا ما يحمي أرقامك
+                  المعتمدة من التعديل بأثر رجعي.
+                </span>
+              </div>
+            </div>
+            <div className="form-grid">
+              <label className="field">
+                <span>من تاريخ</span>
+                <input type="date" name="from" required />
+              </label>
+              <label className="field">
+                <span>إلى تاريخ</span>
+                <input type="date" name="to" required />
+              </label>
+            </div>
+            <SupplierField label="ملاحظة" name="note" placeholder="إقفال الشهر" />
+            <button className="primary-btn full" type="submit">
+              <Lock size={18} /> إقفال الفترة
+            </button>
+          </form>
         </Modal>
       )}
       {showCustomer && (
@@ -1985,6 +2092,7 @@ function ModuleView({
   onAddCustomer,
   onEditCustomer,
   onCollectCustomer,
+  onClosePeriod,
   onDeleteExpense,
   search,
   setSearch,
@@ -2005,6 +2113,10 @@ function ModuleView({
       "كل صنف في مكانه، والناقص يظهر قبل أن يفاجئك.",
     ],
     customers: ["العملاء", "كشوف حسابات، بيع آجل، وتحصيل."],
+    ledger: [
+      "الدفاتر المحاسبية",
+      "دليل الحسابات، دفتر الأستاذ، القيود، والقوائم المالية.",
+    ],
     trialbalance: [
       "ميزان المراجعة",
       "مدين ودائن لكل حساب، ويجب أن يتوازن الجانبان.",
@@ -2279,6 +2391,12 @@ function ModuleView({
         />
       ) : active === "reports" ? (
         <ReportsBoard state={state} />
+      ) : active === "ledger" ? (
+        <LedgerBoard
+          state={state}
+          money={moneyFn}
+          onClosePeriod={onClosePeriod}
+        />
       ) : active === "trialbalance" ? (
         <TrialBalanceBoard state={state} money={moneyFn} />
       ) : active === "datatools" ? (

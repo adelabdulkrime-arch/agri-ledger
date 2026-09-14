@@ -2,7 +2,7 @@
 import { useMemo } from "react";
 import { Download, Printer, Scale } from "lucide-react";
 import { toast } from "sonner";
-import { trialBalance } from "../data/operations";
+import { postedTrialBalance } from "../data/ledger";
 import type { DbState } from "../data/types";
 
 type Props = {
@@ -11,13 +11,13 @@ type Props = {
 };
 
 export default function TrialBalanceBoard({ state, money }: Props) {
-  const tb = useMemo(() => trialBalance(state), [state]);
+  const tb = useMemo(() => postedTrialBalance(state), [state]);
 
   const exportCsv = () => {
     const rows = [
-      ["الحساب", "مدين", "دائن"],
-      ...tb.rows.map(r => [r.account, String(r.debit), String(r.credit)]),
-      ["الإجمالي", String(tb.totalDebit), String(tb.totalCredit)],
+      ["رقم الحساب", "الحساب", "مدين", "دائن"],
+      ...tb.rows.map(r => [r.code, r.name, String(r.debit), String(r.credit)]),
+      ["", "الإجمالي", String(tb.totalDebit), String(tb.totalCredit)],
     ];
     const csv = rows
       .map(r => r.map(c => JSON.stringify(c)).join(","))
@@ -41,13 +41,13 @@ export default function TrialBalanceBoard({ state, money }: Props) {
     const body = tb.rows
       .map(
         r =>
-          `<tr><td>${r.account}</td><td>${r.debit ? money(r.debit) : ""}</td><td>${r.credit ? money(r.credit) : ""}</td></tr>`
+          `<tr><td>${r.code}</td><td>${r.name}</td><td>${r.debit ? money(r.debit) : ""}</td><td>${r.credit ? money(r.credit) : ""}</td></tr>`
       )
       .join("");
     const styles =
       "body{font-family:Arial,sans-serif;padding:22px;color:#16352d}h1{margin:0 0 4px}p{color:#666;margin:0 0 14px;font-size:13px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{border:1px solid #ddd;padding:8px;text-align:right}th{background:#f2f6f2}tfoot td{font-weight:bold;background:#f7f7f2}";
     win.document.write(
-      `<html dir="rtl"><head><meta charset="utf-8"><title>ميزان المراجعة</title><style>${styles}</style></head><body><h1>ميزان المراجعة</h1><p>حتى ${new Date().toLocaleString("ar-EG")}</p><table><thead><tr><th>الحساب</th><th>مدين</th><th>دائن</th></tr></thead><tbody>${body}</tbody><tfoot><tr><td>الإجمالي</td><td>${money(tb.totalDebit)}</td><td>${money(tb.totalCredit)}</td></tr></tfoot></table><script>window.onload=function(){window.print()}</script></body></html>`
+      `<html dir="rtl"><head><meta charset="utf-8"><title>ميزان المراجعة</title><style>${styles}</style></head><body><h1>ميزان المراجعة</h1><p>حتى ${new Date().toLocaleString("ar-EG")}</p><table><thead><tr><th>رقم</th><th>الحساب</th><th>مدين</th><th>دائن</th></tr></thead><tbody>${body}</tbody><tfoot><tr><td colspan=2>الإجمالي</td><td>${money(tb.totalDebit)}</td><td>${money(tb.totalCredit)}</td></tr></tfoot></table><script>window.onload=function(){window.print()}</script></body></html>`
     );
     win.document.close();
   };
@@ -77,6 +77,7 @@ export default function TrialBalanceBoard({ state, money }: Props) {
           <table className="data-table">
             <thead>
               <tr>
+                <th>رقم</th>
                 <th>الحساب</th>
                 <th>مدين</th>
                 <th>دائن</th>
@@ -84,8 +85,9 @@ export default function TrialBalanceBoard({ state, money }: Props) {
             </thead>
             <tbody>
               {tb.rows.map(r => (
-                <tr key={r.account}>
-                  <td>{r.account}</td>
+                <tr key={r.code}>
+                  <td>{r.code}</td>
+                  <td>{r.name}</td>
                   <td>{r.debit ? money(r.debit) : "—"}</td>
                   <td>{r.credit ? money(r.credit) : "—"}</td>
                 </tr>
@@ -93,7 +95,7 @@ export default function TrialBalanceBoard({ state, money }: Props) {
             </tbody>
             <tfoot>
               <tr className="tb-total">
-                <td>
+                <td colSpan={2}>
                   <b>الإجمالي</b>
                 </td>
                 <td>
