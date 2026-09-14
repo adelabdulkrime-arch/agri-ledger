@@ -3,7 +3,7 @@
 import type { DbState, Product } from "./types";
 
 export const DB_KEY = "agri-db";
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 /** المفاتيح القديمة قبل توحيد التخزين؛ نقرأ منها مرة واحدة ثم نتركها كنسخة أمان. */
 const LEGACY_PRODUCTS = "agri-products";
@@ -25,6 +25,7 @@ export function emptyState(): DbState {
     accounts: [],
     journal: [],
     closedPeriods: [],
+    cashSessions: [],
   };
 }
 
@@ -166,6 +167,12 @@ export function migrate(input: any): DbState {
       };
     });
     version = 11;
+  }
+
+  // 11 -> 12: ورديات الصندوق.
+  if (version < 12) {
+    state.cashSessions = state.cashSessions || [];
+    version = 12;
   }
 
   state.version = version;

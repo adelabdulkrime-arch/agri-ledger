@@ -321,6 +321,31 @@ export type FiscalPeriod = {
   note: string;
 };
 
+
+/** حالة الوردية: مفتوحة تقبل الحركات، ومقفلة لا تقبل. */
+export type SessionStatus = "open" | "closed";
+
+/**
+ * وردية صندوق: فترة عمل بين فتح وإقفال، تُجرد نقديتها في نهايتها
+ * فيظهر العجز أو الزيادة بدل أن يضيع بلا أثر.
+ */
+export type CashSession = {
+  no: number;
+  openedAt: string;
+  /** النقد الموجود في الدرج عند الفتح. */
+  openingFloat: number;
+  openedBy: string;
+  closedAt?: string;
+  /** النقد المعدود فعليًا عند الإقفال. */
+  countedCash?: number;
+  /** ما يجب أن يكون في الدرج حسب الحركات المرحَّلة. */
+  expectedCash?: number;
+  /** المعدود ناقص المتوقع: سالب عجز وموجب زيادة. */
+  variance?: number;
+  status: SessionStatus;
+  note: string;
+};
+
 /** الحالة الكاملة المحفوظة؛ كل ما يخص المحل في مكان واحد. */
 export type DbState = {
   version: number;
@@ -337,4 +362,5 @@ export type DbState = {
   accounts: Account[];
   journal: JournalEntry[];
   closedPeriods: FiscalPeriod[];
+  cashSessions: CashSession[];
 };

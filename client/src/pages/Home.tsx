@@ -43,6 +43,7 @@ import {
   Upload,
   UserRound,
   UsersRound,
+  Wallet,
   WalletCards,
   X,
   Zap,
@@ -104,6 +105,12 @@ import {
   closePeriod,
   postOpeningBalance,
 } from "../data/ledger";
+import {
+  activeSession,
+  closeCashSession,
+  expectedCash,
+  openCashSession,
+} from "../data/session";
 import type {
   Customer,
   DbState,
@@ -127,6 +134,7 @@ import CustomersBoardNew from "../components/CustomersBoard";
 import DataToolsBoard from "../components/DataToolsBoard";
 import TrialBalanceBoard from "../components/TrialBalanceBoard";
 import LedgerBoard from "../components/LedgerBoard";
+import SessionBoard from "../components/SessionBoard";
 import ProductUnitsDialog from "../components/ProductUnitsDialog";
 import { useUsbScanner } from "../hooks/useUsbScanner";
 import { useInstallPrompt } from "../hooks/useInstallPrompt";
@@ -219,6 +227,7 @@ const menu = [
   { id: "customers", label: "العملاء", icon: UsersRound },
   { id: "expenses", label: "المصروفات", icon: WalletCards },
   { id: "accounts", label: "الحسابات", icon: Calculator },
+  { id: "session", label: "وردية الصندوق", icon: Wallet },
   { id: "ledger", label: "الدفاتر المحاسبية", icon: BookOpen },
   { id: "trialbalance", label: "ميزان المراجعة", icon: Scale },
   { id: "datatools", label: "الجرد والاستيراد", icon: ClipboardList },
@@ -307,6 +316,8 @@ export default function Home() {
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
   const { canInstall, install } = useInstallPrompt();
   const [showExpense, setShowExpense] = useState(false);
+  const [showOpenSession, setShowOpenSession] = useState(false);
+  const [showCloseSession, setShowCloseSession] = useState(false);
   const [showOpening, setShowOpening] = useState(false);
   const [showClosePeriod, setShowClosePeriod] = useState(false);
   const [showCustomer, setShowCustomer] = useState(false);
@@ -892,6 +903,43 @@ export default function Home() {
     );
   };
 
+  const submitOpenSession = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    runSafe(
+      draft =>
+        openCashSession(draft, {
+          openingFloat: Number(fd.get("float") || 0),
+          openedBy: String(fd.get("by") || ""),
+          note: String(fd.get("note") || ""),
+        }),
+      session => {
+        setShowOpenSession(false);
+        toast.success(`فُتحت الوردية #${session.no}`);
+      }
+    );
+  };
+
+  const submitCloseSession = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    runSafe(
+      draft =>
+        closeCashSession(draft, {
+          countedCash: Number(fd.get("counted") || 0),
+          note: String(fd.get("note") || ""),
+        }),
+      session => {
+        setShowCloseSession(false);
+        const v = session.variance || 0;
+        if (Math.abs(v) < 0.01) toast.success("أُقفلت الوردية والنقد مطابق");
+        else if (v < 0)
+          toast.warning(`أُقفلت الوردية بعجز ${money(Math.abs(v))}`);
+        else toast.success(`أُقفلت الوردية بزيادة ${money(v)}`);
+      }
+    );
+  };
+
   const submitOpening = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
@@ -1398,6 +1446,8 @@ export default function Home() {
             }}
             onCollectCustomer={(c: Customer) => setCollecting(c)}
             onClosePeriod={() => setShowClosePeriod(true)}
+            onOpenSession={() => setShowOpenSession(true)}
+            onCloseSession={() => setShowCloseSession(true)}
             onOpenUnits={(p: Product) => setUnitsProduct(p)}
             onDeleteExpense={removeExpense}
           />
@@ -1707,6 +1757,57 @@ export default function Home() {
             onAddBarcode={productUnitActions.addBarcode}
             onRemoveBarcode={productUnitActions.removeBarcode}
           />
+        </Modal>
+      )}
+      {showOpenSession && (
+        <Modal title="فتح وردية" onClose={() => setShowOpenSession(false)}>
+          <form className="product-form" onSubmit={submitOpenSession}>
+            <div className="backup-reminder">
+              <Wallet size={18} />
+              <span>أدخل النقد الموجود في الدرج الآن قبل بدء البيع.</span>
+            </div>
+            <SupplierField label="رصيد الدرج" name="float" placeholder="0" />
+            <SupplierField
+              label="اسم الموظف"
+              name="by"
+              placeholder="صاحب المحل"
+            />
+            <SupplierField label="ملاحظة" name="note" placeholder="اختياري" />
+            <button className="primary-btn full" type="submit">
+              <Check size={18} /> فتح الوردية
+            </button>
+          </form>
+        </Modal>
+      )}
+      {showCloseSession && (
+        <Modal
+          title="إقفال الوردية وجرد النقد"
+          onClose={() => setShowCloseSession(false)}
+        >
+          <form className="product-form" onSubmit={submitCloseSession}>
+            <div className="backup-reminder">
+              <Wallet size={18} />
+              <span>المتوقع في الدرج</span>
+              <b>
+                {money(
+                  activeSession(state) ? expectedCash(state, activeSession(state)!) : 0
+                )}
+              </b>
+            </div>
+            <SupplierField
+              label="النقد المعدود فعليًا"
+              name="counted"
+              placeholder="0"
+            />
+            <div className="search-hint">
+              عُدّ النقد أولًا ثم أدخل الرقم؛ أي فرق يُسجَّل كعجز أو زيادة
+              بقيد محاسبي.
+            </div>
+            <SupplierField label="ملاحظة" name="note" placeholder="اختياري" />
+            <button className="primary-btn full" type="submit">
+              <Check size={18} /> إقفال الوردية
+            </button>
+          </form>
         </Modal>
       )}
       {showOpening && (
@@ -2214,6 +2315,8 @@ function ModuleView({
   onEditCustomer,
   onCollectCustomer,
   onClosePeriod,
+  onOpenSession,
+  onCloseSession,
   onDeleteExpense,
   search,
   setSearch,
@@ -2234,6 +2337,10 @@ function ModuleView({
       "كل صنف في مكانه، والناقص يظهر قبل أن يفاجئك.",
     ],
     customers: ["العملاء", "كشوف حسابات، بيع آجل، وتحصيل."],
+    session: [
+      "وردية الصندوق",
+      "افتح الوردية صباحًا، وأقفلها مساءً بعد عدّ النقد.",
+    ],
     ledger: [
       "الدفاتر المحاسبية",
       "دليل الحسابات، دفتر الأستاذ، القيود، والقوائم المالية.",
@@ -2512,6 +2619,13 @@ function ModuleView({
         />
       ) : active === "reports" ? (
         <ReportsBoard state={state} />
+      ) : active === "session" ? (
+        <SessionBoard
+          state={state}
+          money={moneyFn}
+          onOpen={onOpenSession}
+          onClose={onCloseSession}
+        />
       ) : active === "ledger" ? (
         <LedgerBoard
           state={state}
