@@ -483,6 +483,14 @@ export function closePeriod(
   to: string,
   note = ""
 ) {
+  // إقفال الفترة يمنع أي تعديل على ماضي الدفاتر، فهو صلاحية المالك وحده.
+  const users = state.users || [];
+  if (users.length) {
+    const actor = users.find(u => u.id === state.currentUserId && u.active);
+    if (!actor) fail("سجّل الدخول أولًا");
+    if (actor.role !== "owner") fail("لا تملك صلاحية إقفال الفترات");
+  }
+
   const start = new Date(from);
   const end = new Date(to);
   if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()))

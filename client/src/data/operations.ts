@@ -40,6 +40,77 @@ export function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
+/** صلاحيات كل دور؛ معرَّفة هنا لأن users.ts يستورد من هذا الملف. */
+const ROLE_RIGHTS: Record<string, string[]> = {
+  owner: [
+    "sell",
+    "purchase",
+    "voidInvoice",
+    "editCost",
+    "viewProfit",
+    "manageUsers",
+    "closePeriod",
+    "stockTake",
+    "backup",
+  ],
+  manager: [
+    "sell",
+    "purchase",
+    "voidInvoice",
+    "editCost",
+    "viewProfit",
+    "stockTake",
+    "backup",
+  ],
+  cashier: ["sell"],
+};
+
+const RIGHT_NAMES: Record<string, string> = {
+  sell: "البيع",
+  purchase: "الشراء",
+  voidInvoice: "إلغاء الفواتير",
+  editCost: "تعديل التكلفة",
+  viewProfit: "رؤية الأرباح",
+  manageUsers: "إدارة المستخدمين",
+  closePeriod: "إقفال الفترات",
+  stockTake: "الجرد",
+  backup: "النسخ والاستعادة",
+};
+
+/**
+ * يمنع العملية على من لا يملك صلاحيتها، ويسجّلها في سجل التدقيق.
+ *
+ * بلا مستخدمين مسجّلين يُسمح بكل شيء: محل بمشغّل واحد لا يُجبَر على
+ * تسجيل دخول لا يحتاجه. وبوجودهم، الدور هو ما يحكم.
+ *
+ * حدٌّ يجب أن يبقى واضحًا: هذا ضبط تشغيلي يمنع الخطأ ويثبّت المسؤولية،
+ * لا حاجز أمني. البيانات في متصفح الجهاز، ومن يفتح أدوات المطور
+ * يتجاوزه. الحماية الحقيقية تحتاج خادمًا يتحقق من كل طلب.
+ */
+function guard(state: DbState, right: string, description: string) {
+  const users = state.users || [];
+  if (users.length) {
+    const user = users.find(u => u.id === state.currentUserId && u.active);
+    if (!user) fail("سجّل الدخول أولًا");
+    if (!(ROLE_RIGHTS[user.role] || []).includes(right))
+      fail(`لا تملك صلاحية ${RIGHT_NAMES[right] || right}`);
+  }
+
+  if (!state.auditLog) state.auditLog = [];
+  const actor = users.find(u => u.id === state.currentUserId);
+  state.auditLog.push({
+    id: nextId(state.auditLog),
+    at: new Date().toISOString(),
+    userId: actor?.id,
+    userName: actor?.name || "غير محدد",
+    action: right,
+    description,
+  });
+  // السجل لا ينمو بلا حد على جهاز محدود المساحة.
+  if (state.auditLog.length > 2000)
+    state.auditLog = state.auditLog.slice(-2000);
+}
+
 export const INSTRUMENT_LABELS: Record<PaymentInstrument, string> = {
   cash: "نقدًا",
   bank: "تحويل بنكي",
@@ -457,6 +528,7 @@ export function buildPurchaseDraft(state: DbState, input: PurchaseInput) {
  * يجب استدعاؤها داخل transact حتى تكون العملية كلها أو لا شيء.
  */
 export function postPurchase(state: DbState, input: PurchaseInput): Purchase {
+  guard(state, "purchase", "تسجيل فاتورة شراء");
   const draft = buildPurchaseDraft(state, input);
   const at = input.at || new Date().toISOString();
   const no = nextNumber(state.purchases, 5000);
@@ -625,6 +697,7 @@ function applyPurchaseToInventory(
  * نستخدم الإلغاء بدل الحذف حتى يبقى أثر العملية في السجل.
  */
 export function voidPurchase(state: DbState, no: number): Purchase {
+  guard(state, "voidInvoice", `إلغاء فاتورة شراء #${no}`);
   const purchase = state.purchases.find(p => p.no === no);
   if (!purchase) fail("الفاتورة غير موجودة");
   if (purchase.status === "void") fail("الفاتورة ملغاة بالفعل");
@@ -729,6 +802,7 @@ export function payPurchase(
   amount: number,
   options: { instrument?: PaymentInstrument; reference?: string } = {}
 ): Purchase {
+  guard(state, "purchase", `سداد دفعة على فاتورة #${no}`);
   const purchase = state.purchases.find(p => p.no === no);
   if (!purchase) fail("الفاتورة غير موجودة");
   if (purchase.status === "void") fail("الفاتورة ملغاة");
@@ -815,6 +889,7 @@ export type SaleInput = {
  * تثبيت التكلفة هو ما يجعل أرباح الماضي غير قابلة للتغير لاحقًا.
  */
 export function postSale(state: DbState, input: SaleInput): Sale {
+  guard(state, "sell", "تسجيل فاتورة بيع");
   if (!input.lines?.length) fail("أضف صنفًا واحدًا على الأقل");
 
   const at = input.at || new Date().toISOString();
@@ -1390,6 +1465,7 @@ export type ExpenseInput = {
 };
 
 export function addExpense(state: DbState, input: ExpenseInput): Expense {
+  guard(state, "purchase", "تسجيل مصروف");
   const description = (input.description || "").trim();
   if (!description) fail("اكتب وصفًا للمصروف");
 
@@ -1861,6 +1937,7 @@ export function collectFromCustomer(
   note = "تحصيل نقدي",
   options: { instrument?: PaymentInstrument; reference?: string } = {}
 ): CustomerLedgerEntry {
+  guard(state, "sell", "تحصيل من عميل");
   const customer = state.customers.find(c => c.id === customerId);
   if (!customer) fail("العميل غير موجود");
   const value = round2(Number(amount));
@@ -1941,6 +2018,7 @@ export function postStockTake(
   lines: StockTakeLine[],
   note = "جرد فعلي"
 ): StockMove[] {
+  guard(state, "stockTake", note);
   if (!lines?.length) fail("أضف صنفًا واحدًا على الأقل للجرد");
 
   const at = new Date().toISOString();
@@ -2027,6 +2105,7 @@ export function postStockTake(
 
 /** تصفير أرصدة كل الأصناف وتكاليفها، للبدء من سجل نظيف قبل التشغيل. */
 export function resetOpeningBalances(state: DbState): number {
+  guard(state, "stockTake", "تصفير أرصدة البداية");
   const lines = state.products
     .filter(p => p.stock !== 0 || p.avgCost !== 0)
     .map(p => ({ productId: p.id, countedQty: 0, unitCost: 0 }));

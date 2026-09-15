@@ -305,6 +305,54 @@ const menu = [
   { id: "users", label: "المستخدمون والتدقيق", icon: UserCog },
 ];
 
+/** الصلاحية التي يتطلبها كل قسم؛ ما لا يُذكر هنا متاح للجميع. */
+const SECTION_RIGHTS: Record<string, string> = {
+  purchases: "purchase",
+  suppliers: "purchase",
+  expenses: "purchase",
+  reorder: "purchase",
+  datatools: "stockTake",
+  damage: "stockTake",
+  warehouses: "stockTake",
+  batches: "stockTake",
+  accounts: "viewProfit",
+  ledger: "viewProfit",
+  trialbalance: "viewProfit",
+  reports: "viewProfit",
+  vat: "viewProfit",
+  aging: "viewProfit",
+  assets: "viewProfit",
+  pricing: "viewProfit",
+  vouchers: "viewProfit",
+  reconcile: "viewProfit",
+  users: "manageUsers",
+};
+
+/** نسخة للواجهة من صلاحيات الأدوار؛ المصدر الحقيقي في طبقة البيانات. */
+const ROLE_RIGHTS_UI: Record<string, string[]> = {
+  owner: [
+    "sell",
+    "purchase",
+    "voidInvoice",
+    "editCost",
+    "viewProfit",
+    "manageUsers",
+    "closePeriod",
+    "stockTake",
+    "backup",
+  ],
+  manager: [
+    "sell",
+    "purchase",
+    "voidInvoice",
+    "editCost",
+    "viewProfit",
+    "stockTake",
+    "backup",
+  ],
+  cashier: ["sell"],
+};
+
 /** لون تاريخ الصلاحية: أحمر للمنتهي وبرتقالي للمقترب. */
 function expiryTone(date?: string) {
   const days = daysUntil(date);
@@ -349,6 +397,26 @@ export default function Home() {
   );
   const { state, run, replace, recovered, bootError } = useDb(catalogSeed);
   const { products, sales, suppliers, purchases, stockMoves } = state;
+
+  /**
+   * الأقسام التي يملك المستخدم الحالي صلاحيتها.
+   *
+   * إخفاء ما لا يملكه أصدق من إظهاره ثم رفضه بعد الضغط: الشاشة لا
+   * تَعِد بما لا تفي به. وبلا مستخدمين مسجّلين يظهر كل شيء، فمحل
+   * بمشغّل واحد لا يُخفى عنه شيء.
+   */
+  const visibleMenu = useMemo(() => {
+    const users = state.users || [];
+    if (!users.length) return menu;
+    const me = users.find(u => u.id === state.currentUserId && u.active);
+    if (!me) return menu.filter(m => m.id === "home");
+
+    const rights = ROLE_RIGHTS_UI[me.role] || [];
+    return menu.filter(item => {
+      const needed = SECTION_RIGHTS[item.id];
+      return !needed || rights.includes(needed);
+    });
+  }, [state.users, state.currentUserId]);
 
   /** ينفذ عملية على البيانات ويعرض رسالة مفهومة عند الفشل. */
   const runSafe = usePersistFn(
@@ -1529,7 +1597,7 @@ export default function Home() {
           <span className="pulse-dot" /> يعمل دون إنترنت
         </div>
         <nav className="nav-list">
-          {menu.map(item => {
+          {visibleMenu.map(item => {
             const Icon = item.icon;
             return (
               <button

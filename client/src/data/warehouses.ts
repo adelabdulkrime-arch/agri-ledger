@@ -16,6 +16,7 @@ import {
   warehouseStock,
 } from "./operations";
 import { nextId, nextNumber } from "./store";
+import { requirePermission } from "./users";
 
 function fail(message: string): never {
   throw new OperationError(message);
@@ -190,6 +191,8 @@ export function transferStock(
   input: TransferInput
 ): Transfer {
   if (!state.transfers) state.transfers = [];
+  // نقل البضاعة بين الفروع تصرّف في المخزون، فيتبع صلاحية الجرد.
+  requirePermission(state, "stockTake");
 
   const from = (state.warehouses || []).find(
     w => w.id === input.fromWarehouseId

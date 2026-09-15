@@ -15,6 +15,7 @@ import {
 } from "./operations";
 import { ACC, postJournal } from "./ledger";
 import { nextNumber } from "./store";
+import { requirePermission } from "./users";
 
 function fail(message: string): never {
   throw new OperationError(message);
@@ -49,6 +50,8 @@ export function recordDamage(
   input: DamageInput
 ): DamageRecord {
   if (!state.damages) state.damages = [];
+  // الإتلاف خسارة مقصودة، فهو من صلاحيات الجرد لا البيع.
+  requirePermission(state, "stockTake");
 
   const product = state.products.find(p => p.id === input.productId);
   if (!product) fail("الصنف غير موجود");
