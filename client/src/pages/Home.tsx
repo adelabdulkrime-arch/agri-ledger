@@ -201,7 +201,7 @@ import { usePersistFn } from "../hooks/usePersistFn";
 
 const assetBase = import.meta.env.BASE_URL || "/";
 const logoUrl = `${assetBase}brand/agri-mark.svg`;
-const oneMediaUrl = `${assetBase}brand/one-media.svg`;
+const oneMediaUrl = `${assetBase}brand/one-media.jpg`;
 
 type CartLine = Product & {
   /** الكمية بوحدة البيع المختارة، لا بالوحدة الأساسية. */
