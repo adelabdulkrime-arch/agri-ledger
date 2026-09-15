@@ -1634,7 +1634,7 @@ export default function Home() {
           <div className="rights-badge">M1</div>
           <div>
             <small>حقوق الهوية البصرية</small>
-            <strong>Media One</strong>
+            <strong>One Media</strong>
           </div>
         </div>
       </aside>
