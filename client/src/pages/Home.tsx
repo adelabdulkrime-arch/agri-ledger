@@ -194,6 +194,8 @@ import AssetsBoard from "../components/AssetsBoard";
 import PricingBoard from "../components/PricingBoard";
 import DamageBoard from "../components/DamageBoard";
 import ReorderBoard from "../components/ReorderBoard";
+import LoginGate from "../components/LoginGate";
+import CashierHome from "../components/CashierHome";
 import ProductUnitsDialog from "../components/ProductUnitsDialog";
 import { useUsbScanner } from "../hooks/useUsbScanner";
 import { useInstallPrompt } from "../hooks/useInstallPrompt";
@@ -398,6 +400,18 @@ export default function Home() {
   );
   const { state, run, replace, recovered, bootError } = useDb(catalogSeed);
   const { products, sales, suppliers, purchases, stockMoves } = state;
+
+  /** المستخدم النشط الآن؛ غيابه يعني أن البوابة هي ما يُعرض. */
+  const activeUser = useMemo(
+    () =>
+      (state.users || []).find(
+        u => u.id === state.currentUserId && u.active
+      ),
+    [state.users, state.currentUserId]
+  );
+  const signedIn = !!activeUser;
+  /** البائع يرى شاشة بيع مبسّطة لا نسخة مقلّمة من شاشة المدير. */
+  const isCashier = activeUser?.role === "cashier";
 
   /**
    * الأقسام التي يملك المستخدم الحالي صلاحيتها.
@@ -630,7 +644,7 @@ export default function Home() {
   const exportBackup = () => {
     // النسخة تحمل كل الجداول: المنتجات والمبيعات والموردين والمشتريات والحركات.
     const payload = {
-      app: "دفتر الزراعة",
+      app: "OneMedia24 ERP",
       exportedAt: new Date().toISOString(),
       ...state,
     };
@@ -1107,6 +1121,47 @@ export default function Home() {
     );
   };
 
+  /**
+   * دخول من بوابة الشاشة الكاملة: يتحقق من الاسم والرمز معًا.
+   *
+   * الرمز وحده لا يكفي هنا: البوابة تطلب الاسم أيضًا كما طلب المدير،
+   * ومطابقة الاثنين تمنع دخول شخص برمز زميله بالخطأ.
+   */
+  const doGateLogin = (name: string, pin: string): string => {
+    if (!name) return "اكتب اسم المستخدم";
+    if (!pin) return "اكتب كلمة السر";
+
+    const match = (state.users || []).find(
+      u =>
+        u.active &&
+        u.name.trim().toLowerCase() === name.toLowerCase() &&
+        u.pin === pin
+    );
+    if (!match) return "اسم المستخدم أو كلمة السر غير صحيحة";
+
+    const ok = runSafe(
+      draft => login(draft, pin),
+      user => toast.success(`أهلًا ${user.name}`)
+    );
+    return ok ? "" : "تعذّر تسجيل الدخول";
+  };
+
+  /** إنشاء المالك الأول ثم إدخاله مباشرة، فالنظام لا يُفتح بلا مستخدم. */
+  const doGateFirstUser = (name: string, pin: string): string => {
+    if (!name) return "اكتب اسم المستخدم";
+    if (!/^\d{4,6}$/.test(pin)) return "كلمة السر يجب أن تكون 4 إلى 6 أرقام";
+
+    let failure = "";
+    runSafe(
+      draft => {
+        createUser(draft, { name, role: "owner", pin });
+        return login(draft, pin);
+      },
+      user => toast.success(`أهلًا ${user.name} — أنت مالك النظام`)
+    ) || (failure = "تعذّر إنشاء الحساب");
+    return failure;
+  };
+
   const doLogout = () =>
     runSafe(
       draft => logout(draft),
@@ -1564,7 +1619,7 @@ export default function Home() {
     // الصفة الضريبية بلا تسجيل مخالفة لا تجميل.
     const s = state.settings;
     const isTaxInvoice = !!s?.vatRegistered && !!s?.taxNumber && taxTotal > 0;
-    const heading = s?.tradeName || s?.name || "دفتر الزراعة";
+    const heading = s?.tradeName || s?.name || "OneMedia24 ERP";
     const subheading = s?.tradeName && s?.name ? s.name : "";
     const netTotal = round2(subtotal - lineDiscounts - invoiceCut);
     const sellerRows = [
@@ -1581,15 +1636,30 @@ export default function Home() {
     receipt.document.close();
   };
 
+  // بوابة الدخول تسبق كل شيء: لا يُفتح النظام قبل معرفة من يشغّله ودوره.
+  if (!signedIn)
+    return (
+      <LoginGate
+        state={state}
+        logoUrl={logoUrl}
+        onLogin={doGateLogin}
+        onCreateFirst={doGateFirstUser}
+      />
+    );
+
+
   return (
-    <div className="app-shell" dir="rtl">
+    <div
+      className={`app-shell ${isCashier ? "cashier-mode" : ""}`}
+      dir="rtl"
+    >
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">
-            <img src={logoUrl} alt="دفتر الزراعة" />
+            <img src={logoUrl} alt="OneMedia24 ERP" />
           </div>
           <div className="brand-wordmark">
-            <strong>دفتر الزراعة</strong>
+            <strong>OneMedia24 ERP</strong>
             <span>إدارة أسهل… لمحصول أكبر</span>
             <i />
           </div>
@@ -1641,10 +1711,21 @@ export default function Home() {
       </aside>
 
       <main className="main-area">
+        {isCashier ? (
+          <CashierHome
+            state={state}
+            money={money}
+            userName={activeUser!.name}
+            onNewSale={() => setShowSale(true)}
+            onScan={() => setShowScanner(true)}
+            onLogout={doLogout}
+          />
+        ) : (
+        <>
         <header className="topbar">
           <div className="mobile-brand">
-            <img src={logoUrl} alt="دفتر الزراعة" />
-            <b>دفتر الزراعة</b>
+            <img src={logoUrl} alt="OneMedia24 ERP" />
+            <b>OneMedia24 ERP</b>
             <i />
           </div>
           <div className="breadcrumb">
@@ -2009,11 +2090,13 @@ export default function Home() {
           />
         )}
         <footer className="footer">
-          <span>دفتر الزراعة v1.0 · مصمم لمحل الواحة الزراعية</span>
+          <span>OneMedia24 ERP v1.0 · حقوق الهوية البصرية One Media</span>
           <span>
             <CloudOff size={14} /> بياناتك على جهازك أولاً
           </span>
         </footer>
+        </>
+        )}
       </main>
 
       {showSale && (
@@ -3370,7 +3453,7 @@ function ModuleView({
     <section className="module-view">
       <div className="module-head">
         <div>
-          <div className="eyebrow">دفتر الزراعة / {title}</div>
+          <div className="eyebrow">OneMedia24 ERP / {title}</div>
           <h1>{title}</h1>
           <p>{desc}</p>
         </div>
@@ -3952,7 +4035,7 @@ function ReportsBoard({ state }: { state: DbState }) {
       )
       .join("");
     win.document.write(
-      `<html dir="rtl"><head><meta charset="utf-8"><title>تقرير الربحية</title><style>${styles}</style></head><body><h1>دفتر الزراعة — تقرير الربحية</h1><p>الفترة: ${periodLabel} · طُبع في ${new Date().toLocaleString("ar-EG")}</p><div class="sum"><div>المبيعات<b>${money(profit.revenue)}</b></div><div>تكلفة البضاعة المباعة<b>${money(profit.cogs)}</b></div><div>إجمالي الربح<b>${money(profit.grossProfit)}</b></div><div>هامش الربح<b>${profit.margin}%</b></div><div>المصروفات<b>${money(profit.expenses)}</b></div><div>صافي الربح<b>${money(profit.netProfit)}</b></div><div>المشتريات<b>${money(purchasesSum)}</b></div><div>مستحق للموردين<b>${money(payables)}</b></div></div><table><thead><tr><th>الصنف</th><th>الكمية</th><th>المبيعات</th><th>التكلفة</th><th>الربح</th></tr></thead><tbody>${rows}</tbody></table><script>window.onload=function(){window.print()}</script></body></html>`
+      `<html dir="rtl"><head><meta charset="utf-8"><title>تقرير الربحية</title><style>${styles}</style></head><body><h1>OneMedia24 ERP — تقرير الربحية</h1><p>الفترة: ${periodLabel} · طُبع في ${new Date().toLocaleString("ar-EG")}</p><div class="sum"><div>المبيعات<b>${money(profit.revenue)}</b></div><div>تكلفة البضاعة المباعة<b>${money(profit.cogs)}</b></div><div>إجمالي الربح<b>${money(profit.grossProfit)}</b></div><div>هامش الربح<b>${profit.margin}%</b></div><div>المصروفات<b>${money(profit.expenses)}</b></div><div>صافي الربح<b>${money(profit.netProfit)}</b></div><div>المشتريات<b>${money(purchasesSum)}</b></div><div>مستحق للموردين<b>${money(payables)}</b></div></div><table><thead><tr><th>الصنف</th><th>الكمية</th><th>المبيعات</th><th>التكلفة</th><th>الربح</th></tr></thead><tbody>${rows}</tbody></table><script>window.onload=function(){window.print()}</script></body></html>`
     );
     win.document.close();
   };
