@@ -294,6 +294,13 @@ export type Draft = {
   /** رقم فاتورة البيع: مرجع سند التسليم، أو نتيجة التحويل. */
   saleNo?: number;
   convertedAt?: string;
+  /**
+   * هل خرجت بضاعة هذا السند من المخزون فعلًا؟
+   * يخص سندات التسليم: فاتورتها اللاحقة تحاسب فقط ولا تخصم مرة ثانية.
+   */
+  stockIssued?: boolean;
+  /** المخزن الذي خرجت منه بضاعة التسليم. */
+  warehouseId?: number;
   /** صلاحية عرض السعر؛ بعدها لا يُلزم المحل بسعره. */
   validUntil?: string;
 };
@@ -353,7 +360,12 @@ export type StockMoveType =
   | "ADJUSTMENT"
   | "PURCHASE_VOID"
   /** إتلاف مقصود: تالف أو منتهٍ أو مفقود، مفصولًا عن تسويات الجرد. */
-  | "DAMAGE";
+  | "DAMAGE"
+  /**
+   * تسليم بضاعة للعميل قبل فوترتها.
+   * يُخرج المخزون ولا يُنشئ إيرادًا؛ الإيراد يأتي مع الفاتورة لاحقًا.
+   */
+  | "DELIVERY";
 
 export type StockMove = {
   id: number;
@@ -661,6 +673,8 @@ export type ShopSettings = {
   crNumber: string;
   address: string;
   phone: string;
+  /** عملة الدفاتر؛ كل الترحيل يتم بها مهما كانت عملة الفاتورة. */
+  baseCurrency?: CurrencyCode;
   /** النسبة الافتراضية المقترحة عند إدخال الضريبة. */
   vatRate: number;
   /**
@@ -708,6 +722,8 @@ export type DbState = {
   costCenters?: CostCenter[];
   /** سجل البضاعة المتلفة. */
   damages?: DamageRecord[];
+  /** أسعار صرف العملات مقابل العملة المحلية. */
+  currencies?: Currency[];
   /** طلبات اعتماد العمليات الحساسة. */
   approvals?: ApprovalRequest[];
   /** أوامر الشراء قبل الفواتير. */
@@ -823,4 +839,24 @@ export type ApprovalRequest = {
   decidedAt?: string;
   decidedBy?: string;
   decisionNote?: string;
+};
+
+/**
+ * العملات المدعومة: المحلية اليمنية، والسعودي والدولار للتعامل الخارجي.
+ *
+ * حدٌّ محاسبي يجب أن يبقى واضحًا: الدفاتر تُمسك بعملة واحدة هي عملة
+ * المنشأة. العملة الأجنبية تُحفظ كما أُدخلت مع سعر صرفها يوم العملية،
+ * ويُرحَّل ما يعادلها محليًا. بغير ذلك يصير ميزان المراجعة جمعًا لأرقام
+ * من عملات مختلفة، وهو رقم بلا معنى.
+ */
+export type CurrencyCode = "YER" | "SAR" | "USD";
+
+export type Currency = {
+  code: CurrencyCode;
+  name: string;
+  symbol: string;
+  /** كم وحدة من العملة المحلية تساوي وحدة واحدة من هذه العملة. */
+  rate: number;
+  /** آخر تحديث لسعر الصرف. */
+  updatedAt: string;
 };

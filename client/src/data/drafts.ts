@@ -16,7 +16,16 @@ import type {
   DraftStatus,
   Product,
 } from "./types";
-import { OperationError, findUnit, round2, unitPrice } from "./operations";
+import {
+  OperationError,
+  defaultWarehouseId,
+  findUnit,
+  recordMove,
+  round2,
+  unitPrice,
+} from "./operations";
+import { consumeFEFO } from "./batches";
+import { availableQty } from "./reservations";
 import { nextNumber } from "./store";
 import { releaseForDraft, reserveForDraft } from "./reservations";
 
@@ -135,8 +144,11 @@ export function createDraft(state: DbState, input: DraftInput): Draft {
     : undefined;
   if (input.customerId && !customerRecord) fail("العميل غير موجود");
 
-  if (input.kind === "delivery") {
-    if (!input.saleNo) fail("سند التسليم يحتاج رقم فاتورة");
+  // سند التسليم نوعان:
+  //   مرتبط بفاتورة قائمة → توثيق استلام فقط، الفاتورة خصمت أصلًا.
+  //   مستقل بلا فاتورة    → تسليم قبل الفوترة، فهو ما يُخرج المخزون.
+  // التمييز بينهما ضروري وإلا خُصمت الكمية مرتين أو لم تُخصم أبدًا.
+  if (input.kind === "delivery" && input.saleNo !== undefined) {
     if (!state.sales.some(s => s.no === input.saleNo))
       fail("الفاتورة غير موجودة");
   }
@@ -172,7 +184,7 @@ export function createDraft(state: DbState, input: DraftInput): Draft {
   state.drafts.unshift(draft);
 
   // أمر البيع وحده يحجز: العرض وعدٌ بسعر لا التزام بكمية، والمعلّقة سلة
-  // لم تُعتمد بعد، وسند التسليم لفاتورة خصمت أصلًا.
+  // لم تُعتمد بعد.
   if (input.kind === "order")
     reserveForDraft(
       state,
@@ -181,7 +193,60 @@ export function createDraft(state: DbState, input: DraftInput): Draft {
       input.warehouseId
     );
 
+  // سند التسليم المستقل يُخرج البضاعة فعلًا: العميل أخذها، فلا يصح أن
+  // يقول الدفتر إنها ما زالت على الرف حتى تُكتب الفاتورة.
+  //
+  // لا قيد محاسبي هنا: لم يتحقق إيراد بعد، والبضاعة ما زالت ملكًا للمحل
+  // قانونًا حتى الفوترة. تكلفة المبيع تُثبَّت مع الفاتورة لا قبلها.
+  if (input.kind === "delivery" && input.saleNo === undefined) {
+    issueDeliveryStock(state, draft, input.warehouseId);
+    draft.stockIssued = true;
+    draft.warehouseId = input.warehouseId;
+  }
+
   return draft;
+}
+
+/**
+ * يُخرج بضاعة سند التسليم من المخزن.
+ *
+ * يتحقق من المتاح لا الفعلي: لا يُسلَّم ما هو محجوز لأمر بيع آخر.
+ * والتحقق يسبق أي كتابة، فلا يخرج نصف سند.
+ */
+function issueDeliveryStock(
+  state: DbState,
+  draft: Draft,
+  warehouseId?: number
+) {
+  const where = warehouseId ?? defaultWarehouseId(state);
+
+  const prepared = draft.lines.map(line => {
+    const product = state.products.find(p => p.id === line.productId);
+    if (!product) fail(`الصنف غير موجود: ${line.name}`);
+    const free = availableQty(state, product.id, where);
+    if (line.qty > free)
+      fail(
+        `المتاح للتسليم من ${product.name} هو ${free} ${product.unit}`
+      );
+    return { product, line };
+  });
+
+  prepared.forEach(({ product, line }) => {
+    const consumed = consumeFEFO(state, product.id, line.qty, where);
+    recordMove(state, {
+      productId: product.id,
+      productName: product.name,
+      type: "DELIVERY",
+      qty: -line.qty,
+      unitCost: product.avgCost,
+      refType: "delivery",
+      refNo: draft.no,
+      note: consumed.length
+        ? `تسليم · تشغيلة ${consumed.map(c => c.lotNo).join("، ")}`
+        : `تسليم إلى ${draft.customer}`,
+      warehouseId: where,
+    });
+  });
 }
 
 export function findDraft(state: DbState, kind: DraftKind, no: number) {
@@ -294,4 +359,42 @@ export function draftSummary(state: DbState, kind: DraftKind) {
     converted: rows.filter(d => d.status === "converted").length,
     expired: open.filter(d => isExpired(d)).length,
   };
+}
+
+/**
+ * يربط سند تسليم بفاتورته بعد فوترته.
+ *
+ * السند يبقى في السجل بحالته «حُوِّل»: البضاعة خرجت يوم التسليم،
+ * والفاتورة وثّقت الإيراد لاحقًا. الربط يجيب «أي فاتورة غطّت هذا
+ * التسليم؟» — وهو السؤال الذي يكشف ما سُلّم ولم يُفوتر بعد.
+ */
+export function linkDeliveryToSale(
+  state: DbState,
+  deliveryNo: number,
+  saleNo: number
+): Draft {
+  const draft = findDraft(state, "delivery", deliveryNo);
+  if (!draft) fail("سند التسليم غير موجود");
+  if (draft.status === "converted")
+    fail(`السند فُوتر بالفاتورة #${draft.saleNo} من قبل`);
+  if (draft.status === "cancelled") fail("السند ملغى");
+
+  draft.status = "converted";
+  draft.saleNo = saleNo;
+  draft.convertedAt = new Date().toISOString();
+  return draft;
+}
+
+/** سندات التسليم التي خرجت بضاعتها ولم تُفوتر بعد. */
+export function unbilledDeliveries(state: DbState) {
+  return (state.drafts || []).filter(
+    d => d.kind === "delivery" && d.stockIssued && d.status === "open"
+  );
+}
+
+/** قيمة ما سُلّم ولم يُفوتر؛ رقم يجب أن يعرفه صاحب المحل. */
+export function unbilledValue(state: DbState) {
+  return round2(
+    unbilledDeliveries(state).reduce((sum, d) => sum + d.total, 0)
+  );
 }

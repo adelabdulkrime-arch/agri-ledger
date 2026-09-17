@@ -51,6 +51,7 @@ export function emptyState(): DbState {
     reservations: [],
     purchaseOrders: [],
     approvals: [],
+    currencies: [],
     settings: {
       name: "",
       tradeName: "",
@@ -58,6 +59,7 @@ export function emptyState(): DbState {
       crNumber: "",
       address: "",
       phone: "",
+      baseCurrency: "YER",
       vatRate: 0,
       vatRegistered: false,
     },
@@ -295,6 +297,7 @@ export function migrate(input: any): DbState {
 
   // 21 -> 22: حجز الكميات لأوامر البيع.
   if (version < 22) {
+    state.currencies = state.currencies || [];
     state.approvals = state.approvals || [];
     state.purchaseOrders = state.purchaseOrders || [];
     state.reservations = state.reservations || [];

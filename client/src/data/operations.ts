@@ -897,6 +897,14 @@ export type SaleInput = {
    * حجوزات هذا الأمر لا تُحسب ضدّه، وإلا منع الأمرُ نفسَه من التحويل.
    */
   fromDraftNo?: number;
+  /**
+   * رقم سند تسليم خرجت بضاعته من المخزن فعلًا.
+   *
+   * الفاتورة حينها تحاسب فقط: تُثبت الإيراد وتكلفة المبيع، ولا تخصم
+   * الكمية مرة ثانية لأنها خرجت يوم التسليم. بدون هذا يُخصم المخزون
+   * مرتين ويظهر عجز وهمي عند الجرد.
+   */
+  fromDeliveryNo?: number;
 };
 
 /**
@@ -952,7 +960,9 @@ export function postSale(state: DbState, input: SaleInput): Sale {
       )
       .reduce((sum, r) => sum + r.qty, 0);
     const available = round2(physical - heldForOthers);
-    if (baseQty > available)
+    // البضاعة المسلَّمة سلفًا خرجت أصلًا، فلا يُقاس توفّرها الآن:
+    // رصيدها نقص يوم التسليم، ومطالبتها بالتوفّر تمنع فوترة ما سُلّم.
+    if (input.fromDeliveryNo === undefined && baseQty > available)
       fail(
         `الرصيد المتاح من ${product.name} هو ${round2(available / unit.factor)} ${unit.name}`
       );
@@ -985,7 +995,13 @@ export function postSale(state: DbState, input: SaleInput): Sale {
     });
   });
 
+  // البضاعة المسلَّمة بسند خرجت من المخزن يوم التسليم، فالفاتورة هنا
+  // تحاسب فقط ولا تخصم مرة ثانية. هذا ما يمنع العجز الوهمي عند الجرد.
+  const alreadyIssued = input.fromDeliveryNo !== undefined;
+
   lines.forEach(line => {
+    if (alreadyIssued) return;
+
     // الصرف بقاعدة الأقرب انتهاءً أولًا، وتُسجَّل الدفعات في السطر
     // ليمكن تتبّع من اشترى أي تشغيلة عند الحاجة لسحبها.
     const consumed = consumeFEFO(state, line.id, line.qty, sellingWarehouse);
@@ -2233,4 +2249,5 @@ export const MOVE_LABELS: Record<StockMoveType, string> = {
   ADJUSTMENT: "تسوية",
   PURCHASE_VOID: "إلغاء شراء",
   DAMAGE: "إتلاف",
+  DELIVERY: "تسليم",
 };

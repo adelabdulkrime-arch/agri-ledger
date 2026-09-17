@@ -186,15 +186,20 @@ describe("صلاحية عرض السعر", () => {
 });
 
 describe("سند التسليم", () => {
-  it("يحتاج فاتورة قائمة", () => {
-    expect(() =>
-      run(d =>
-        createDraft(d, {
-          kind: "delivery",
-          lines: [{ productId: 1, qty: 1 }],
-        })
-      )
-    ).toThrow(/رقم فاتورة/);
+  it("يُقبل بلا فاتورة: تسليم قبل الفوترة يُخرج المخزون", () => {
+    // صار السند نوعين: مستقل يُخرج البضاعة، ومرتبط بفاتورة يوثّق فقط.
+    const stockBefore = db.products[0].stock;
+    run(d =>
+      createDraft(d, {
+        kind: "delivery",
+        customer: "أحمد",
+        lines: [{ productId: 1, qty: 1 }],
+      })
+    );
+    expect(db.products[0].stock).toBe(stockBefore - 1);
+  });
+
+  it("يرفض الربط بفاتورة غير موجودة", () => {
     expect(() =>
       run(d =>
         createDraft(d, {

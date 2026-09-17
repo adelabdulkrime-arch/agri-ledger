@@ -103,6 +103,7 @@ import {
   voidPurchase,
 } from "../data/operations";
 import {
+  DB_KEY,
   StorageError,
   emptyState,
   migrate,
@@ -136,6 +137,7 @@ import type {
   Product,
   Purchase,
   PaymentInstrument,
+  CurrencyCode,
   DamageReason,
   ApprovalRequest,
   PurchaseOrder,
@@ -171,6 +173,7 @@ import {
   setListPrice,
 } from "../data/pricing";
 import { DAMAGE_REASON_LABELS, recordDamage } from "../data/damage";
+import { CURRENCY_NAMES, formatMoney, setRate } from "../data/currency";
 import {
   approvePurchaseOrder,
   cancelPurchaseOrder,
@@ -395,11 +398,28 @@ function relativeTime(iso: string) {
   });
 }
 
+/**
+ * تنسيق المبالغ بعملة الدفاتر.
+ *
+ * كل الأرقام المعروضة بعملة واحدة هي عملة المنشأة، لأن الدفاتر تُمسك
+ * بها. العملة الأجنبية تظهر عند إدخالها مع سعر صرفها، ويُرحَّل ما
+ * يعادلها محليًا — فلا يصير الميزان جمعًا لعملات مختلفة.
+ */
 function money(value: number) {
-  return (
-    new Intl.NumberFormat("ar-EG", { maximumFractionDigits: 2 }).format(value) +
-    " ر.ي"
-  );
+  return formatMoney(value, readBaseCurrency());
+}
+
+/** عملة الدفاتر من الإعدادات المحفوظة؛ الريال اليمني افتراضًا. */
+function readBaseCurrency(): CurrencyCode {
+  try {
+    const raw = localStorage.getItem(DB_KEY);
+    if (!raw) return "YER";
+    const parsed = JSON.parse(raw);
+    return parsed?.settings?.baseCurrency || "YER";
+  } catch {
+    // تعذّرت القراءة (وضع خاص أو تخزين محجوب)؛ المحلية هي الافتراض.
+    return "YER";
+  }
 }
 
 export default function Home() {
@@ -1210,6 +1230,15 @@ export default function Home() {
   };
 
   const onAddPurchaseOrder = () => setShowPO(true);
+
+  /** ضبط سعر صرف عملة؛ صفر يعني «غير مضبوط» فيُرفض التحويل بها. */
+  const onSetCurrencyRate = (code: CurrencyCode, rate: number) => {
+    if (!rate) return;
+    runSafe(
+      draft => setRate(draft, code, rate),
+      c => toast.success(`سعر ${c.name} صار ${c.rate}`)
+    );
+  };
 
   /** البتّ في طلب اعتماد؛ الرفض يطلب سببًا فلا يُرفض طلب بلا بيان. */
   const onDecideApproval = (
@@ -2169,6 +2198,7 @@ export default function Home() {
             onLoginUser={() => setShowLogin(true)}
             onLogoutUser={doLogout}
             onSaveSettings={saveSettings}
+            onSetCurrencyRate={onSetCurrencyRate}
             onToggleCleared={toggleReconciled}
             onClearAll={clearReconciledUpTo}
             onConvertDraft={onConvertDraft}
@@ -3490,6 +3520,7 @@ function ModuleView({
   onLoginUser,
   onLogoutUser,
   onSaveSettings,
+  onSetCurrencyRate,
   onToggleCleared,
   onClearAll,
   onConvertDraft,
@@ -3936,7 +3967,11 @@ function ModuleView({
           onClearAll={onClearAll}
         />
       ) : active === "settings" ? (
-        <SettingsBoard state={state} onSave={onSaveSettings} />
+        <SettingsBoard
+          state={state}
+          onSave={onSaveSettings}
+          onSetRate={onSetCurrencyRate}
+        />
       ) : active === "users" ? (
         <UsersBoard
           state={state}

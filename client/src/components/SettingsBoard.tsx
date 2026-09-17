@@ -1,11 +1,13 @@
 // Design: «سوق الحقل» — بيانات المحل التي تظهر على الفاتورة النظامية.
 import { useState } from "react";
-import { Check, ShieldCheck, Store } from "lucide-react";
-import type { DbState, ShopSettings } from "../data/types";
+import { Check, Coins, ShieldCheck, Store } from "lucide-react";
+import { CURRENCY_NAMES, currenciesOf } from "../data/currency";
+import type { CurrencyCode, DbState, ShopSettings } from "../data/types";
 
 type Props = {
   state: DbState;
   onSave: (patch: ShopSettings) => void;
+  onSetRate: (code: CurrencyCode, rate: number) => void;
 };
 
 const EMPTY: ShopSettings = {
@@ -16,10 +18,11 @@ const EMPTY: ShopSettings = {
   address: "",
   phone: "",
   vatRate: 0,
+  baseCurrency: "YER",
   vatRegistered: false,
 };
 
-export default function SettingsBoard({ state, onSave }: Props) {
+export default function SettingsBoard({ state, onSave, onSetRate }: Props) {
   const [form, setForm] = useState<ShopSettings>({
     ...EMPTY,
     ...(state.settings || {}),
@@ -113,6 +116,88 @@ export default function SettingsBoard({ state, onSave }: Props) {
             onChange={e => set("vatRate", Number(e.target.value))}
           />
         </label>
+        <label className="field">
+          <span>عملة الدفاتر</span>
+          <select
+            className="category-select"
+            value={form.baseCurrency || "YER"}
+            onChange={e =>
+              set("baseCurrency", e.target.value as CurrencyCode)
+            }
+          >
+            {(Object.keys(CURRENCY_NAMES) as CurrencyCode[]).map(code => (
+              <option key={code} value={code}>
+                {CURRENCY_NAMES[code]}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div className="panel table-panel" style={{ margin: "0 16px 16px" }}>
+        <div className="table-toolbar">
+          <b style={{ fontSize: 13, color: "#284e40" }}>
+            <Coins size={15} /> أسعار الصرف مقابل عملة الدفاتر
+          </b>
+        </div>
+        <div className="security-note" style={{ margin: "0 0 12px" }}>
+          <Coins size={17} />
+          <span>
+            الدفاتر تُمسك بعملة واحدة. العملة الأجنبية تُحفظ كما أُدخلت مع
+            سعر صرفها، ويُرحَّل ما يعادلها محليًا — وإلا صار الميزان جمعًا
+            لعملات مختلفة، وهو رقم بلا معنى.
+          </span>
+        </div>
+        <div className="data-table">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>العملة</th>
+                <th>الرمز</th>
+                <th>كم تساوي بعملة الدفاتر</th>
+                <th>آخر تحديث</th>
+              </tr>
+            </thead>
+            <tbody>
+              {currenciesOf(state).map(c => {
+                const isBase = c.code === (form.baseCurrency || "YER");
+                return (
+                  <tr key={c.code}>
+                    <td>
+                      <b>{c.name}</b>
+                      {isBase && (
+                        <span className="terms-chip credit">عملة الدفاتر</span>
+                      )}
+                    </td>
+                    <td>{c.symbol}</td>
+                    <td>
+                      {isBase ? (
+                        <span style={{ color: "#8a9a91" }}>1 (المرجع)</span>
+                      ) : (
+                        <input
+                          type="number"
+                          min={0}
+                          step="any"
+                          defaultValue={c.rate || ""}
+                          placeholder="اكتب السعر"
+                          style={{ width: 130 }}
+                          onBlur={e =>
+                            onSetRate(c.code, Number(e.target.value || 0))
+                          }
+                        />
+                      )}
+                    </td>
+                    <td style={{ fontSize: 11.5, color: "#8a9a91" }}>
+                      {c.rate
+                        ? new Date(c.updatedAt).toLocaleDateString("ar-EG")
+                        : "غير مضبوط"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div className="security-note" style={{ margin: "0 16px 16px" }}>
