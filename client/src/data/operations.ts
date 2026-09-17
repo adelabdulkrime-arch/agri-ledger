@@ -87,7 +87,13 @@ const RIGHT_NAMES: Record<string, string> = {
  * لا حاجز أمني. البيانات في متصفح الجهاز، ومن يفتح أدوات المطور
  * يتجاوزه. الحماية الحقيقية تحتاج خادمًا يتحقق من كل طلب.
  */
-function guard(state: DbState, right: string, description: string) {
+function guard(
+  state: DbState,
+  right: string,
+  description: string,
+  /** ما تغيّر: القيمة قبل وبعد، ليجيب السجل «ماذا تغيّر» لا «ماذا جرى» فقط. */
+  change?: { before?: string; after?: string; refType?: string; refNo?: number }
+) {
   const users = state.users || [];
   if (users.length) {
     const user = users.find(u => u.id === state.currentUserId && u.active);
@@ -105,6 +111,10 @@ function guard(state: DbState, right: string, description: string) {
     userName: actor?.name || "غير محدد",
     action: right,
     description,
+    before: change?.before,
+    after: change?.after,
+    refType: change?.refType,
+    refNo: change?.refNo,
   });
   // السجل لا ينمو بلا حد على جهاز محدود المساحة.
   if (state.auditLog.length > 2000)
@@ -1034,10 +1044,19 @@ export function postSale(state: DbState, input: SaleInput): Sale {
     if (
       customerRecord.creditLimit > 0 &&
       owed + sale.total > customerRecord.creditLimit
-    )
-      fail(
-        `يتجاوز حد ائتمان ${customerRecord.name} البالغ ${customerRecord.creditLimit}`
+    ) {
+      // التجاوز ممكن باعتماد مسبق من مسؤول، لا بقرار البائع وحده.
+      const approved = (state.approvals || []).some(
+        a =>
+          a.kind === "creditOverride" &&
+          a.status === "approved" &&
+          a.refNo === customerRecord.id
       );
+      if (!approved)
+        fail(
+          `يتجاوز حد ائتمان ${customerRecord.name} البالغ ${customerRecord.creditLimit} — يحتاج اعتماد مسؤول`
+        );
+    }
     state.customerLedger.push({
       id: nextId(state.customerLedger),
       customerId: customerRecord.id,
@@ -2062,6 +2081,13 @@ export function postStockTake(
   prepared.forEach(({ product, counted, cost }) => {
     // التكلفة تُصحَّح أولًا لأن الرصيد الجديد يُقيَّم بها.
     if (cost !== undefined) {
+      // تعديل التكلفة يمسّ تقييم المخزون كله، فيُسجَّل بقيمته قبل وبعد.
+      guard(state, "editCost", `تعديل تكلفة ${product.name}`, {
+        before: `التكلفة ${product.avgCost}`,
+        after: `التكلفة ${round2(cost)}`,
+        refType: "product",
+        refNo: product.id,
+      });
       product.avgCost = round2(cost);
       if (!product.lastCost) product.lastCost = round2(cost);
     }

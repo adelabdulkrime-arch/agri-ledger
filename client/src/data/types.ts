@@ -638,6 +638,10 @@ export type AuditEntry = {
   action: string;
   /** وصف عربي مقروء لما جرى. */
   description: string;
+  /** القيمة قبل التعديل، لسجل تدقيق يجيب «ماذا تغيّر». */
+  before?: string;
+  /** القيمة بعد التعديل. */
+  after?: string;
   /** نوع المستند المتأثر ورقمه، للربط. */
   refType?: string;
   refNo?: number;
@@ -704,6 +708,8 @@ export type DbState = {
   costCenters?: CostCenter[];
   /** سجل البضاعة المتلفة. */
   damages?: DamageRecord[];
+  /** طلبات اعتماد العمليات الحساسة. */
+  approvals?: ApprovalRequest[];
   /** أوامر الشراء قبل الفواتير. */
   purchaseOrders?: PurchaseOrder[];
   /** حجوزات أوامر البيع؛ تنقص المتاح للبيع لا الرصيد الفعلي. */
@@ -779,4 +785,42 @@ export type PurchaseOrder = {
   receivedAt?: string;
   /** فواتير الشراء التي نتجت عنه؛ قد تكون أكثر من واحدة بالاستلام الجزئي. */
   purchaseNos?: number[];
+};
+
+/**
+ * طلب اعتماد لعملية حساسة.
+ *
+ * الوثيقة (§11.3) تشترط اعتمادًا مستقلًا لما يمسّ الماضي أو يتجاوز
+ * الحدود: إلغاء مستند مرحَّل، تعديل تكلفة، تجاوز حد ائتمان، إعادة فتح
+ * فترة مقفلة، تسوية عجز. الطلب يُسجَّل بمن طلبه وسببه، ثم يُعتمد أو
+ * يُرفض بمن بتّ فيه — فلا تمرّ عملية حساسة بلا أثر لمن أذن بها.
+ */
+export type ApprovalKind =
+  | "voidPosted"
+  | "editCost"
+  | "creditOverride"
+  | "reopenPeriod"
+  | "stockVariance"
+  | "priceOverride";
+
+export type ApprovalStatus = "pending" | "approved" | "rejected";
+
+export type ApprovalRequest = {
+  no: number;
+  kind: ApprovalKind;
+  at: string;
+  requestedBy: string;
+  requestedById?: number;
+  /** وصف ما يُطلب اعتماده، بالعربية. */
+  description: string;
+  /** سبب الطلب كما كتبه صاحبه. */
+  reason: string;
+  refType?: string;
+  refNo?: number;
+  /** القيمة محل الطلب، مثل مبلغ التجاوز أو التكلفة الجديدة. */
+  amount?: number;
+  status: ApprovalStatus;
+  decidedAt?: string;
+  decidedBy?: string;
+  decisionNote?: string;
 };

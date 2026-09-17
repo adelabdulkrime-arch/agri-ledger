@@ -137,6 +137,7 @@ import type {
   Purchase,
   PaymentInstrument,
   DamageReason,
+  ApprovalRequest,
   PurchaseOrder,
   Draft,
   Sale,
@@ -177,6 +178,7 @@ import {
   markReceived,
   orderToPurchaseInput,
 } from "../data/purchaseorders";
+import { decideApproval } from "../data/approvals";
 const BarcodeScanner = lazy(() => import("../components/BarcodeScanner"));
 const PurchaseDialog = lazy(() => import("../components/PurchaseDialog"));
 import SuppliersBoard from "../components/SuppliersBoard";
@@ -203,6 +205,7 @@ import PricingBoard from "../components/PricingBoard";
 import DamageBoard from "../components/DamageBoard";
 import ReorderBoard from "../components/ReorderBoard";
 import PurchaseOrdersBoard from "../components/PurchaseOrdersBoard";
+import ApprovalsBoard from "../components/ApprovalsBoard";
 import LoginGate from "../components/LoginGate";
 import CashierHome from "../components/CashierHome";
 import ProductUnitsDialog from "../components/ProductUnitsDialog";
@@ -308,6 +311,7 @@ const menu = [
   { id: "warehouses", label: "المخازن والفروع", icon: WarehouseIcon },
   { id: "reorder", label: "اقتراح الطلب", icon: TrendingUp },
   { id: "purchaseorders", label: "أوامر الشراء", icon: ClipboardList },
+  { id: "approvals", label: "الاعتمادات", icon: ShieldCheck },
   { id: "damage", label: "التالف والفاقد", icon: PackageX },
   { id: "assets", label: "الأصول والمقدمات", icon: Landmark },
   { id: "pricing", label: "الأسعار والمراكز", icon: Tags },
@@ -327,6 +331,7 @@ const SECTION_RIGHTS: Record<string, string> = {
   datatools: "stockTake",
   damage: "stockTake",
   purchaseorders: "purchase",
+  approvals: "viewProfit",
   warehouses: "stockTake",
   batches: "stockTake",
   accounts: "viewProfit",
@@ -1205,6 +1210,22 @@ export default function Home() {
   };
 
   const onAddPurchaseOrder = () => setShowPO(true);
+
+  /** البتّ في طلب اعتماد؛ الرفض يطلب سببًا فلا يُرفض طلب بلا بيان. */
+  const onDecideApproval = (
+    request: ApprovalRequest,
+    approve: boolean
+  ) => {
+    const note = approve
+      ? window.prompt(`ملاحظة على اعتماد الطلب #${request.no}؟`, "") ?? ""
+      : window.prompt(`سبب رفض الطلب #${request.no}؟`, "");
+    if (!approve && note === null) return;
+    runSafe(
+      draft => decideApproval(draft, request.no, approve, note || ""),
+      () =>
+        toast.success(approve ? "اعتُمد الطلب" : "رُفض الطلب")
+    );
+  };
 
   const onApprovePO = (order: PurchaseOrder) =>
     runSafe(
@@ -2158,6 +2179,7 @@ export default function Home() {
             onTransferStock={onTransferStock}
             onAddDamage={onAddDamage}
             onAddPurchaseOrder={onAddPurchaseOrder}
+            onDecideApproval={onDecideApproval}
             onApprovePO={onApprovePO}
             onReceivePO={onReceivePO}
             onCancelPO={onCancelPO}
@@ -3478,6 +3500,7 @@ function ModuleView({
   onTransferStock,
   onAddDamage,
   onAddPurchaseOrder,
+  onDecideApproval,
   onApprovePO,
   onReceivePO,
   onCancelPO,
@@ -3851,6 +3874,12 @@ function ModuleView({
         <AgingBoard state={state} money={moneyFn} />
       ) : active === "vat" ? (
         <VatBoard state={state} money={moneyFn} />
+      ) : active === "approvals" ? (
+        <ApprovalsBoard
+          state={state}
+          money={moneyFn}
+          onDecide={onDecideApproval}
+        />
       ) : active === "purchaseorders" ? (
         <PurchaseOrdersBoard
           state={state}

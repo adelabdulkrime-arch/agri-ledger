@@ -50,6 +50,7 @@ export function emptyState(): DbState {
     damages: [],
     reservations: [],
     purchaseOrders: [],
+    approvals: [],
     settings: {
       name: "",
       tradeName: "",
@@ -294,6 +295,7 @@ export function migrate(input: any): DbState {
 
   // 21 -> 22: حجز الكميات لأوامر البيع.
   if (version < 22) {
+    state.approvals = state.approvals || [];
     state.purchaseOrders = state.purchaseOrders || [];
     state.reservations = state.reservations || [];
     version = 22;
