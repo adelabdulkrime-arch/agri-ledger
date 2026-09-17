@@ -14,6 +14,7 @@ import {
   transfersOf,
   warehouseSummary,
 } from "../data/warehouses";
+import { reservedQty } from "../data/reservations";
 import type { DbState, Warehouse } from "../data/types";
 
 type Props = {
@@ -187,6 +188,7 @@ export default function WarehousesBoard({
                   {active.map(w => (
                     <th key={w.id}>{w.name}</th>
                   ))}
+                  <th>محجوز</th>
                   <th>الإجمالي</th>
                 </tr>
               </thead>
@@ -205,6 +207,9 @@ export default function WarehousesBoard({
                         </td>
                       );
                     })}
+                    <td className={reservedQty(state, p.id) ? "warn-text" : ""}>
+                      {reservedQty(state, p.id) || "—"}
+                    </td>
                     <td>
                       <b>{p.stock}</b>
                     </td>

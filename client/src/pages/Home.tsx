@@ -137,6 +137,7 @@ import type {
   Purchase,
   PaymentInstrument,
   DamageReason,
+  PurchaseOrder,
   Draft,
   Sale,
   ShopSettings,
@@ -169,6 +170,13 @@ import {
   setListPrice,
 } from "../data/pricing";
 import { DAMAGE_REASON_LABELS, recordDamage } from "../data/damage";
+import {
+  approvePurchaseOrder,
+  cancelPurchaseOrder,
+  createPurchaseOrder,
+  markReceived,
+  orderToPurchaseInput,
+} from "../data/purchaseorders";
 const BarcodeScanner = lazy(() => import("../components/BarcodeScanner"));
 const PurchaseDialog = lazy(() => import("../components/PurchaseDialog"));
 import SuppliersBoard from "../components/SuppliersBoard";
@@ -194,6 +202,7 @@ import AssetsBoard from "../components/AssetsBoard";
 import PricingBoard from "../components/PricingBoard";
 import DamageBoard from "../components/DamageBoard";
 import ReorderBoard from "../components/ReorderBoard";
+import PurchaseOrdersBoard from "../components/PurchaseOrdersBoard";
 import LoginGate from "../components/LoginGate";
 import CashierHome from "../components/CashierHome";
 import ProductUnitsDialog from "../components/ProductUnitsDialog";
@@ -298,6 +307,7 @@ const menu = [
   { id: "aging", label: "أعمار الديون", icon: HandCoins },
   { id: "warehouses", label: "المخازن والفروع", icon: WarehouseIcon },
   { id: "reorder", label: "اقتراح الطلب", icon: TrendingUp },
+  { id: "purchaseorders", label: "أوامر الشراء", icon: ClipboardList },
   { id: "damage", label: "التالف والفاقد", icon: PackageX },
   { id: "assets", label: "الأصول والمقدمات", icon: Landmark },
   { id: "pricing", label: "الأسعار والمراكز", icon: Tags },
@@ -316,6 +326,7 @@ const SECTION_RIGHTS: Record<string, string> = {
   reorder: "purchase",
   datatools: "stockTake",
   damage: "stockTake",
+  purchaseorders: "purchase",
   warehouses: "stockTake",
   batches: "stockTake",
   accounts: "viewProfit",
@@ -484,6 +495,7 @@ export default function Home() {
   const [payingPurchase, setPayingPurchase] = useState<Purchase | null>(null);
   const [showWarehouse, setShowWarehouse] = useState(false);
   const [showDamage, setShowDamage] = useState(false);
+  const [showPO, setShowPO] = useState(false);
   const [showAsset, setShowAsset] = useState(false);
   const [showPrepaid, setShowPrepaid] = useState(false);
   const [showPriceList, setShowPriceList] = useState(false);
@@ -1167,6 +1179,74 @@ export default function Home() {
       draft => logout(draft),
       () => toast.success("تم تسجيل الخروج")
     );
+
+  /** أمر شراء جديد من أصناف يختارها المستخدم؛ يبدأ مسودة بلا أثر. */
+  const submitPurchaseOrder = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    const productId = Number(fd.get("productId"));
+    const qty = Number(fd.get("qty") || 0);
+    const unitCost = Number(fd.get("unitCost") || 0);
+    const expected = String(fd.get("expectedAt") || "");
+
+    runSafe(
+      draft =>
+        createPurchaseOrder(draft, {
+          supplierId: Number(fd.get("supplierId")),
+          expectedAt: expected ? new Date(expected).toISOString() : undefined,
+          note: String(fd.get("note") || ""),
+          lines: [{ productId, qty, unitCost }],
+        }),
+      order => {
+        setShowPO(false);
+        toast.success(`أُنشئ أمر الشراء #${order.no} كمسودة`);
+      }
+    );
+  };
+
+  const onAddPurchaseOrder = () => setShowPO(true);
+
+  const onApprovePO = (order: PurchaseOrder) =>
+    runSafe(
+      draft => approvePurchaseOrder(draft, order.no),
+      () => toast.success(`اعتُمد الأمر #${order.no}؛ صار جاهزًا للاستلام`)
+    );
+
+  const onCancelPO = (order: PurchaseOrder) => {
+    const reason = window.prompt(`سبب إلغاء أمر الشراء #${order.no}؟`, "");
+    if (reason === null) return;
+    runSafe(
+      draft => cancelPurchaseOrder(draft, order.no, reason),
+      () => toast.success("أُلغي الأمر")
+    );
+  };
+
+  /**
+   * الاستلام يُنشئ فاتورة الشراء ويثبّت الاستلام في معاملة واحدة،
+   * فلا يُعلَّم أمر مستلَمًا دون أن تُنشأ فاتورته فعلًا.
+   */
+  const onReceivePO = (order: PurchaseOrder) => {
+    if (
+      !window.confirm(
+        `استلام أمر الشراء #${order.no} من ${order.supplierName} وإنشاء فاتورته؟`
+      )
+    )
+      return;
+    runSafe(
+      draft => {
+        const purchase = postPurchase(draft, {
+          ...orderToPurchaseInput(order),
+          paymentMethod: "credit",
+        });
+        markReceived(draft, order.no, purchase.no);
+        return purchase;
+      },
+      purchase =>
+        toast.success(
+          `استُلم الأمر #${order.no} وأُنشئت فاتورة الشراء #${purchase.no}`
+        )
+    );
+  };
 
   const submitDamage = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -2077,6 +2157,10 @@ export default function Home() {
             onEditWarehouse={onEditWarehouse}
             onTransferStock={onTransferStock}
             onAddDamage={onAddDamage}
+            onAddPurchaseOrder={onAddPurchaseOrder}
+            onApprovePO={onApprovePO}
+            onReceivePO={onReceivePO}
+            onCancelPO={onCancelPO}
             onAddAsset={onAddAsset}
             onAddPrepaid={onAddPrepaid}
             onPostDepreciation={onPostDepreciation}
@@ -2435,6 +2519,62 @@ export default function Home() {
             onAddBarcode={productUnitActions.addBarcode}
             onRemoveBarcode={productUnitActions.removeBarcode}
           />
+        </Modal>
+      )}
+      {showPO && (
+        <Modal title="أمر شراء جديد" onClose={() => setShowPO(false)}>
+          <form className="product-form" onSubmit={submitPurchaseOrder}>
+            <label className="field">
+              <span>المورد</span>
+              <select name="supplierId" className="category-select" required>
+                {suppliers
+                  .filter(s => s.status === "active")
+                  .map(s => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>الصنف</span>
+              <select name="productId" className="category-select" required>
+                {products.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} — الرصيد {p.stock} {p.unit}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="form-grid">
+              <label className="field">
+                <span>الكمية المطلوبة</span>
+                <input name="qty" type="number" min="0" step="any" required />
+              </label>
+              <label className="field">
+                <span>تكلفة الوحدة</span>
+                <input
+                  name="unitCost"
+                  type="number"
+                  min="0"
+                  step="any"
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>التوريد المتوقع</span>
+                <input name="expectedAt" type="date" />
+              </label>
+            </div>
+            <SupplierField label="ملاحظة" name="note" placeholder="اختياري" />
+            <div className="search-hint">
+              يبدأ الأمر مسودة: لا يمسّ المخزون ولا الدفاتر. اعتمده ثم
+              استلمه لتُنشأ فاتورة الشراء ويتحرك المخزون.
+            </div>
+            <button className="primary-btn full" type="submit">
+              <Check size={18} /> حفظ الأمر
+            </button>
+          </form>
         </Modal>
       )}
       {showDamage && (
@@ -3337,6 +3477,10 @@ function ModuleView({
   onEditWarehouse,
   onTransferStock,
   onAddDamage,
+  onAddPurchaseOrder,
+  onApprovePO,
+  onReceivePO,
+  onCancelPO,
   onAddAsset,
   onAddPrepaid,
   onPostDepreciation,
@@ -3380,6 +3524,10 @@ function ModuleView({
     warehouses: [
       "المخازن والفروع",
       "رصيد كل مكان على حدة، والتحويل بينها.",
+    ],
+    purchaseorders: [
+      "أوامر الشراء",
+      "ما طلبتَه من الموردين ولم يصل بعد.",
     ],
     reorder: [
       "اقتراح الطلب",
@@ -3703,6 +3851,15 @@ function ModuleView({
         <AgingBoard state={state} money={moneyFn} />
       ) : active === "vat" ? (
         <VatBoard state={state} money={moneyFn} />
+      ) : active === "purchaseorders" ? (
+        <PurchaseOrdersBoard
+          state={state}
+          money={moneyFn}
+          onAdd={onAddPurchaseOrder}
+          onApprove={onApprovePO}
+          onReceive={onReceivePO}
+          onCancel={onCancelPO}
+        />
       ) : active === "reorder" ? (
         <ReorderBoard state={state} money={moneyFn} />
       ) : active === "damage" ? (

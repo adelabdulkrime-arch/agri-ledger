@@ -704,6 +704,10 @@ export type DbState = {
   costCenters?: CostCenter[];
   /** سجل البضاعة المتلفة. */
   damages?: DamageRecord[];
+  /** أوامر الشراء قبل الفواتير. */
+  purchaseOrders?: PurchaseOrder[];
+  /** حجوزات أوامر البيع؛ تنقص المتاح للبيع لا الرصيد الفعلي. */
+  reservations?: Reservation[];
   /**
    * مفاتيح حركات البنك التي ظهرت في كشف الحساب، بصيغة "رقم القيد:رقم السطر".
    * تُحفظ حتى لا يُعاد التأشير في كل مرة تُفتح فيها التسوية.
@@ -713,4 +717,66 @@ export type DbState = {
   currentUserId?: number;
   /** بيانات المحل؛ اختيارية لأن النسخ القديمة لا تحملها. */
   settings?: ShopSettings;
+};
+
+/**
+ * حجز كمية لأمر بيع: بضاعة موجودة في المخزن لكنها موعودة لعميل.
+ *
+ * الحجز ليس حركة مخزنية: الكمية لم تخرج بعد، فرصيد المخزن الفعلي لا
+ * يتغير. ما يتغير هو «المتاح للبيع» = الفعلي ناقص المحجوز. بدون هذا
+ * يبيع فرعان البضاعة نفسها لعميلين، ويكتشف المحل العجز عند التسليم.
+ */
+export type Reservation = {
+  id: number;
+  /** أمر البيع الذي حجز الكمية. */
+  draftNo: number;
+  productId: number;
+  productName: string;
+  qty: number;
+  warehouseId?: number;
+  at: string;
+  /** يُحرَّر الحجز عند التحويل لفاتورة أو الإلغاء. */
+  released: boolean;
+  releasedAt?: string;
+  releaseReason?: string;
+};
+
+/** حالة أمر الشراء وفق نموذج الحالات الموحّد. */
+export type PurchaseOrderStatus = "draft" | "approved" | "received" | "cancelled";
+
+export type PurchaseOrderLine = {
+  productId: number;
+  name: string;
+  unit: string;
+  qty: number;
+  unitCost: number;
+  total: number;
+  /** ما استُلم فعلًا؛ يسمح بالاستلام الجزئي وتتبّع المتأخر. */
+  receivedQty: number;
+};
+
+/**
+ * أمر شراء: التزام تجاري تجاه مورد قبل وصول البضاعة.
+ *
+ * لا يمسّ المخزون ولا الدفاتر: المخزون يتحرك عند الاستلام، والدفاتر عند
+ * الفاتورة. الأمر يجيب «ماذا طلبتُ ولم يصل بعد؟».
+ */
+export type PurchaseOrder = {
+  no: number;
+  at: string;
+  supplierId: number;
+  supplierName: string;
+  lines: PurchaseOrderLine[];
+  total: number;
+  status: PurchaseOrderStatus;
+  /** موعد التوريد المتوقع؛ تجاوزه يعني تأخرًا. */
+  expectedAt?: string;
+  warehouseId?: number;
+  note: string;
+  createdBy: string;
+  approvedAt?: string;
+  approvedBy?: string;
+  receivedAt?: string;
+  /** فواتير الشراء التي نتجت عنه؛ قد تكون أكثر من واحدة بالاستلام الجزئي. */
+  purchaseNos?: number[];
 };

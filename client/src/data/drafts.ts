@@ -18,6 +18,7 @@ import type {
 } from "./types";
 import { OperationError, findUnit, round2, unitPrice } from "./operations";
 import { nextNumber } from "./store";
+import { releaseForDraft, reserveForDraft } from "./reservations";
 
 function fail(message: string): never {
   throw new OperationError(message);
@@ -67,6 +68,8 @@ export type DraftInput = {
     tax?: number;
   }[];
   invoiceDiscount?: number;
+  /** المخزن الذي يُحجز منه في أمر البيع. */
+  warehouseId?: number;
 };
 
 function buildLines(state: DbState, input: DraftInput): DraftLine[] {
@@ -167,6 +170,17 @@ export function createDraft(state: DbState, input: DraftInput): Draft {
   };
 
   state.drafts.unshift(draft);
+
+  // أمر البيع وحده يحجز: العرض وعدٌ بسعر لا التزام بكمية، والمعلّقة سلة
+  // لم تُعتمد بعد، وسند التسليم لفاتورة خصمت أصلًا.
+  if (input.kind === "order")
+    reserveForDraft(
+      state,
+      draft.no,
+      lines.map(l => ({ productId: l.productId, qty: l.qty })),
+      input.warehouseId
+    );
+
   return draft;
 }
 
@@ -221,6 +235,8 @@ export function markConverted(
   draft.status = "converted";
   draft.saleNo = saleNo;
   draft.convertedAt = new Date().toISOString();
+  // صارت البضاعة فاتورة وخرجت فعلًا؛ الحجز لم يعد له معنى.
+  releaseForDraft(state, no, `تحويل إلى فاتورة #${saleNo}`);
   return draft;
 }
 
@@ -238,6 +254,8 @@ export function cancelDraft(
   draft.status = "cancelled";
   const note = reason.trim();
   if (note) draft.note = draft.note ? `${draft.note} · ${note}` : note;
+  // الأمر أُلغي فتعود بضاعته متاحة للبيع فورًا.
+  releaseForDraft(state, no, note || "إلغاء الأمر");
   return draft;
 }
 
@@ -249,6 +267,8 @@ export function removeDraft(state: DbState, kind: DraftKind, no: number) {
   if (index < 0) fail("المستند غير موجود");
   if (state.drafts![index].status === "converted")
     fail("لا يُحذف مستند صار فاتورة");
+  // الحذف يحرّر الحجز، وإلا بقيت البضاعة مقفلة لأمر لم يعد موجودًا.
+  releaseForDraft(state, no, "حذف المستند");
   state.drafts!.splice(index, 1);
 }
 

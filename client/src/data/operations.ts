@@ -882,6 +882,11 @@ export type SaleInput = {
   instrument?: PaymentInstrument;
   /** المخزن الذي تخرج منه البضاعة؛ افتراضه المخزن الافتراضي. */
   warehouseId?: number;
+  /**
+   * رقم أمر البيع الذي تُحوَّل منه هذه الفاتورة.
+   * حجوزات هذا الأمر لا تُحسب ضدّه، وإلا منع الأمرُ نفسَه من التحويل.
+   */
+  fromDraftNo?: number;
 };
 
 /**
@@ -920,10 +925,23 @@ export function postSale(state: DbState, input: SaleInput): Sale {
     const unit = findUnit(product, raw.unitName);
     const baseQty = round2(qty * unit.factor);
     // الرصيد المعتبر هو رصيد المخزن البائع لا إجمالي المحل: الفرع لا
-    // يبيع ما ليس عنده ولو كان موجودًا في فرع آخر.
-    const available = sellingWarehouse
+    // يبيع ما ليس عنده ولو كان موجودًا في فرع آخر. ويُطرح منه المحجوز
+    // لأوامر بيع أخرى، فالموعود لعميل ليس متاحًا لغيره.
+    const physical = sellingWarehouse
       ? warehouseStock(state, product.id, sellingWarehouse)
       : product.stock;
+    const heldForOthers = (state.reservations || [])
+      .filter(
+        r =>
+          !r.released &&
+          r.productId === product.id &&
+          // الأمر الجاري تحويله لا يحجز عن نفسه.
+          r.draftNo !== input.fromDraftNo &&
+          (sellingWarehouse === undefined ||
+            (r.warehouseId ?? defaultWarehouseId(state)) === sellingWarehouse)
+      )
+      .reduce((sum, r) => sum + r.qty, 0);
+    const available = round2(physical - heldForOthers);
     if (baseQty > available)
       fail(
         `الرصيد المتاح من ${product.name} هو ${round2(available / unit.factor)} ${unit.name}`
